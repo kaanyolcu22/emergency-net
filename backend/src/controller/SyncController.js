@@ -12,149 +12,138 @@ import {
 import { checkTod } from "../util/Util.js";
 import { getBlacklistAsArray } from "../util/DatabaseUtil.js";
 import { addMissingBlacklistedPUs } from "../util/BlacklistUtil.js";
+import { User } from "../database/entity/User.js"; 
 
 class SyncController {
+
+  async emergencySync(req, res) {
+    try {
+      console.log("Emergency sync requested");
+      const channels = await AppDataSource.getRepository(Channel).find({
+        where: { isActive: true }
+      });
+      
+      console.log(`Returning ${channels.length} channels in emergency sync`);
+      
+      return res.status(200).json({
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_EMERGENCY_SYNC_ACK",
+        content: {
+          channels: channels,
+          missingMessages: {},
+          blacklist: []
+        }
+      });
+    } catch (error) {
+      console.error("Emergency sync error:", error);
+      return res.status(500).json({
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_EMERGENCY_SYNC_RJT",
+        error: "Internal server error during emergency sync."
+      });
+    }
+  }
+
+
+
   async sync(req, res, next) {
-    const receivedMessages = req.body.messages;
-    const receivedChannels = req.body.channels;
-    const tod_received = req.body.tod;
+    try {
+      const receivedMessages = req.body.messages;
+      const receivedChannels = req.body.channels;
+      const tod_received = req.body.tod;
 
-    if (!checkTod(tod_received)) {
-      return res.status(408).json({
-        tod: Date.now(),
-        priority: -1,
-        type: "MT_SYNC_RJT",
-        error: "Timeout error.",
-      });
-    }
+      if (!checkTod(tod_received)) {
+        return res.status(408).json({
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_SYNC_RJT",
+          error: "Timeout error.",
+        });
+      }
 
-    if (!req.auth.contentVerified) {
-      res.status(400).json({
-        tod: Date.now(),
-        priority: -1,
-        type: "MT_SYNC_RJT",
-        error: req.auth.errorMessage
-          ? req.auth.errorMessage
-          : "Signature check is failed.",
-      });
-    }
+      if (!req.auth.contentVerified) {
+        return res.status(400).json({
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_SYNC_RJT",
+          error: req.auth.errorMessage
+            ? req.auth.errorMessage
+            : "Signature check is failed.",
+        });
+      }
 
-    const blacklistedPUs = await addMissingBlacklistedPUs(req.body.blacklist);
+      const receivedRecoveryData = req.body.recoveryData || [];
 
-    const flattenedReceivedMessages = Object.values(receivedMessages).flatMap(
-      (messages) => Object.values(messages)
-    );
-
-    const missingMessages = await findMissingMessages(
-      flattenedReceivedMessages
-    );
-    const missingChannels = await findMissingChannels(receivedChannels);
-
-    await Promise.all(
-      missingChannels.map(async (channel) => {
-        if (req.auth.applicable) {
-          const verificationResult = verifyChannel(channel);
-          if (verificationResult.isChannelVerified) {
-            if (channel.isActive) {
-              await AppDataSource.manager
-                .save(Channel, channel)
-                .catch((error) => {
-                  console.error("Error saving channel:", error);
-                  res.status(500).json({
-                    tod: Date.now(),
-                    priority: -1,
-                    type: "MT_SYNC_RJT",
-                    error: "Database error while saving channel.",
-                  });
-                });
-            } else {
-              await AppDataSource.manager.update(
-                Channel,
-                { channelName: channel.channelName },
-                channel
-              );
-            }
+      await Promise.all(
+        receivedRecoveryData.map(async (userData) => {
+          try {
+          } catch (error) {
+            console.error("Error processing recovery data:", error);
           }
-        } else {
-          if (channel.isActive) {
-            await AppDataSource.manager
-              .save(Channel, channel)
-              .catch((error) => {
-                console.error("Error saving channel:", error);
-                res.status(500).json({
-                  tod: Date.now(),
-                  priority: -1,
-                  type: "MT_SYNC_RJT",
-                  error: "Database error while saving channel.",
-                });
-              });
-          } else {
-            await AppDataSource.manager.update(
-              Channel,
-              { channelName: channel.channelName },
-              channel
-            );
-          }
-        }
-      })
-    );
+        })
+      );
 
-    const unverifiedMessages = {};
+      const blacklistedPUs = await addMissingBlacklistedPUs(req.body.blacklist || []);
 
-    await Promise.all(
-      missingMessages.map(async (message) => {
-        if (req.auth.applicable) {
-          const verificationResult = verifyMessage(message);
-          if (verificationResult.isMessageVerified) {
-            message.isSafe = verificationResult.isSafe;
-            await AppDataSource.manager
-              .save(Message, message)
-              .catch((error) => {
-                console.error("Error saving message:", error);
-                res.status(500).json({
-                  tod: Date.now(),
-                  priority: -1,
-                  type: "MT_SYNC_RJT",
-                  error: "Database error while saving message.",
-                });
-              });
-          } else {
-            if (unverifiedMessages[message.channel] === undefined) {
-              unverifiedMessages[message.channel] = [];
-            }
-            unverifiedMessages[message.channel].push(message.hashKey);
+      const flattenedReceivedMessages = Object.values(receivedMessages).flatMap(
+        (messages) => Object.values(messages)
+      );
+
+      const missingMessages = await findMissingMessages(
+        flattenedReceivedMessages
+      );
+      const missingChannels = await findMissingChannels(receivedChannels);
+
+      await Promise.all(
+        missingChannels.map(async (channel) => {
+          try {
+          } catch (error) {
+            console.error("Error processing channel:", error);
           }
-        } else {
-          await AppDataSource.manager.save(Message, message).catch((error) => {
+        })
+      );
+
+      const unverifiedMessages = {};
+
+      await Promise.all(
+        missingMessages.map(async (message) => {
+          try {
+          } catch (error) {
             console.error("Error saving message:", error);
-            res.status(500).json({
-              tod: Date.now(),
-              priority: -1,
-              type: "MT_SYNC_RJT",
-              error: "Database error while saving message.",
-            });
-          });
-        }
-      })
-    );
+          }
+        })
+      );
 
-    const channelsToSend = await getChannelsToSend();
+      const channelsToSend = await getChannelsToSend();
+      const messagesToSend = await getMessagesToSend(receivedMessages);
+      const blacklist = await getBlacklistAsArray();
+      const recoveryData = await AppDataSource.manager.find(User, {
+        select: ["username", "recoveryKeyHash", "recoveryKeySalt", "recoveryKeyUpdatedAt"]
+      });
 
-    const messagesToSend = await getMessagesToSend(receivedMessages);
-
-    const blacklist = await getBlacklistAsArray();
-
-    return res.status(200).json({
-      tod: Date.now(),
-      priority: -1,
-      type: "MT_SYNC_ACK",
-      content: {
-        missingMessages: messagesToSend,
-        unverifiedMessages: unverifiedMessages,
-        channels: channelsToSend,
-        blacklist: blacklist,
-      },
-    });
+      return res.status(200).json({
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_SYNC_ACK",
+        content: {
+          missingMessages: messagesToSend,
+          unverifiedMessages: unverifiedMessages,
+          channels: channelsToSend,
+          blacklist: blacklist,
+          recoveryData: recoveryData 
+        },
+      });
+    } catch (error) {
+      console.error("Sync error:", error);
+      return res.status(500).json({
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_SYNC_RJT",
+        error: "Internal server error during sync."
+      });
+    }
   }
 }
 

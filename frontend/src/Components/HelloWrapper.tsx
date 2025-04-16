@@ -11,11 +11,11 @@ import { hello } from "@/Services/hello";
 import { Button } from "./ui/button";
 import { logout } from "@/Library/util";
 
-// Create the context
-const TokenDataContext = createContext<any>(null);
+const TokenDataContext = createContext(null);
+const TokenDataUpdateContext = createContext((data) => {});
 
-// Custom hook to use the context
 export const useTokenData = () => useContext(TokenDataContext);
+export const useTokenDataUpdate = () => useContext(TokenDataUpdateContext);
 
 function HelloWrapper() {
   const navigate = useNavigate();
@@ -25,41 +25,111 @@ function HelloWrapper() {
   const [tokenData, setTokenData] = useState(null);
 
   useEffect(() => {
-    const token = getCookie("token");
-    if (token) {
-      axios.defaults.headers.common.Authorization = token;
-      const data = getTokenData(token);
-      setTokenData(data);
-    }
-
-    hello()
-      .then(async (res) => {
-        if (res.status === 202) {
-          const APData = await verifyApCert(res.data.content.cert);
-          APDataReference.current = APData;
-          const content = await APResponseVerifier(res.data);
-
-          if (content.isAdmin) {
-            navigate("/PUregister");
-          } else {
-            navigate("/register");
-          }
-        } else if (res.status === 200) {
-          const APData = await verifyApCert(res.data.content.cert);
-          APDataReference.current = APData;
-          APResponseVerifier(res.data);
-          if (
-            location.pathname === "/" ||
-            location.pathname === "" ||
-            location.pathname === "/register" ||
-            location.pathname === "/PUregister"
-          ) {
-            navigate("/home");
+    const initializeApp = async () => {
+      try {
+        const recoveryCompleted = localStorage.getItem("recovery_completed") === "true";
+        if (recoveryCompleted) {
+          console.log("Recovery completed flag found, clearing it");
+          localStorage.removeItem("recovery_completed");
+        }
+        
+        let token = getCookie("token");
+        
+        if (!token && localStorage.getItem("emergency_token")) {
+          console.log("Using emergency token from localStorage");
+          token = localStorage.getItem("emergency_token");
+          
+          setCookie("token", token, {
+            sameSite: "Lax",
+            secure: location.protocol === 'https:',
+            expires: 365,
+            path: '/'
+          });
+        }
+        
+        if (token) {
+          console.log("Token found, setting in axios headers");
+          axios.defaults.headers.common.Authorization = token;
+          
+          try {
+            const data = getTokenData(token);
+            console.log("Token data:", data);
+            setTokenData(data);
+          } catch (error) {
+            console.error("Error parsing token data:", error);
           }
         }
+        
+        try {
+          const res = await hello(token);
+          console.log("Hello response:", res.status);
+          
+          const APData = await verifyApCert(res.data.content.cert);
+          APDataReference.current = APData;
+          console.log("AP certificate verified");
+          
+          const content = await APResponseVerifier(res.data);
+          console.log("Response content verified");
+          
+          if (recoveryCompleted) {
+            console.log("Recovery completed, navigating to home");
+            navigate("/home");
+            setLoading(false);
+            return;
+          }
+          
+          if (res.status === 202) {
+            console.log("User needs to register");
+            if (!["/register", "/PUregister", "/recovery"].includes(location.pathname)) {
+              navigate(content.isAdmin ? "/PUregister" : "/register");
+            }
+          } else if (res.status === 200) {
+            console.log("Status 200 - User is authenticated");
+            if (["/", "/register", "/PUregister", "/recovery"].includes(location.pathname)) {
+              navigate("/home");
+            }
+          }
+        } catch (error) {
+          console.error("Error in hello call:", error);
+          
+          if (error.response && error.response.status === 400) {
+            console.log("Token invalid, clearing and trying without token");
+            
+            removeCookie("token", { path: '/' });
+            localStorage.removeItem("emergency_token");
+            delete axios.defaults.headers.common['Authorization'];
+            
+            try {
+              const res = await hello();
+              console.log("Hello response without token:", res.status);
+              
+              if (res.status === 202) {
+                if (!["/register", "/PUregister", "/recovery"].includes(location.pathname)) {
+                  const content = await APResponseVerifier(res.data);
+                  navigate(content.isAdmin ? "/PUregister" : "/register");
+                }
+              }
+            } catch (retryError) {
+              console.error("Error in retry:", retryError);
+              navigate("/register");
+            }
+          } else {
+            handleError(error);
+            if (location.pathname !== "/recovery") {
+              navigate("/register");
+            }
+          }
+        }
+        
         setLoading(false);
-      })
-      .catch(handleError);
+      } catch (outerError) {
+        console.error("Outer error in HelloWrapper:", outerError);
+        setLoading(false);
+        navigate("/register");
+      }
+    };
+  
+    initializeApp();
   }, []);
 
   if (loading) {
@@ -78,9 +148,11 @@ function HelloWrapper() {
     );
   } else {
     return (
-      <TokenDataContext.Provider value={tokenData}>
-        <Outlet />
-      </TokenDataContext.Provider>
+      <TokenDataUpdateContext.Provider value={setTokenData}>
+        <TokenDataContext.Provider value={tokenData}>
+          <Outlet />
+        </TokenDataContext.Provider>
+      </TokenDataUpdateContext.Provider>
     );
   }
 }

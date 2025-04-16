@@ -22,8 +22,13 @@ function Home() {
   const navigate = useNavigate();
   const APData = useAPData();
   const tokenData = useTokenData();
+  console.log("TokenData in Home (full object):", JSON.stringify(tokenData, null, 2));
   const usernick = `${tokenData?.mtUsername}@${tokenData?.apReg}`;
+  console.log("User isPU:", isPU);
+  console.log("AP Data:", APData);
 
+
+  console.log("TokenData in Home:", tokenData);
   const { mutate: addChannel } = useMutation(createChannel, {
     onSuccess() {
       sync();
@@ -31,11 +36,21 @@ function Home() {
     },
   });
 
-  const { mutate: deleteChannel } = useMutation(destroyChannel, {
-    onSuccess() {
-      sync();
+  const { mutate: deleteChannel } = useMutation(
+    (channelName) => {
+      console.log("Attempting to delete channel:", channelName);
+      return destroyChannel(channelName);
     },
-  });
+    {
+      onSuccess() {
+        console.log("Channel deletion successful");
+        sync();
+      },
+      onError(error) {
+        console.error("Channel deletion failed:", error);
+      }
+    }
+  );
 
   const { mutate: certifyAP } = useMutation(
     async () => {
@@ -111,16 +126,14 @@ function Home() {
           onClose={() => setBanOpen(false)}
           onSubmit={console.log}
         /> */}
-        {store &&
-          store.channels
-            .filter((c: any) => c.isActive)
-            ?.map((channel: any) => (
-              <Card
-                onClick={() => navigate(`/channel/${channel.channelName}`)}
-                className="p-8 flex gap-8 transition-transform duration-100 active:scale-95 relative"
-                key={channel.channelName}
-              >
-                {channel.channelName}
+        {store?.channels?.filter((c) => c.isActive)
+          ?.map((channel) => (
+            <Card
+              onClick={() => navigate(`/channel/${channel.channelName}`)}
+              className="p-8 flex gap-8 transition-transform duration-100 active:scale-95 relative"
+              key={channel.channelName}
+            >
+              {channel.channelName}
                 {isPU && (
                   <AreYouSureDialog
                     title="Kanalı silmek istediğinize emin misiniz?"
@@ -129,6 +142,8 @@ function Home() {
                   >
                     <Trash2 />
                   </AreYouSureDialog>
+
+
                 )}
               </Card>
             ))}
@@ -141,3 +156,5 @@ function Home() {
 }
 
 export default Home;
+
+

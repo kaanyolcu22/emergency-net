@@ -33,15 +33,11 @@ export async function generatePUCert(puPubKey) {
 }
 
 async function convertCryptoKeyToPem(cryptoKey) {
-  // Export the CryptoKey to SPKI format
   const spki = await crypto.subtle.exportKey("spki", cryptoKey);
 
-  // Convert the exported key to Base64
   const pem = Buffer.from(spki).toString("base64");
 
-  // Split the string into 64-character lines
   const lines = pem.match(/.{1,64}/g).join("\n");
 
-  // Wrap with PEM header and footer
   return `-----BEGIN PUBLIC KEY-----\n${lines}\n-----END PUBLIC KEY-----`;
 }

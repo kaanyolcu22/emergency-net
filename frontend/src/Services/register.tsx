@@ -17,6 +17,5 @@ export async function register({
     mtPubKey: jwk,
     password,
   });
-
   return response.data;
 }

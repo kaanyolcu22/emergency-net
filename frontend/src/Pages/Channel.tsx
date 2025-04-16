@@ -4,12 +4,16 @@ import { Input } from "@/Components/ui/input";
 import useSyncStore from "@/Hooks/useSyncStore";
 import { cn } from "@/Library/cn";
 import { convertTodToDate } from "@/Library/date";
-import { message } from "@/Services/message";
+import { message , compressImageForEmergencyNetwork } from "@/Services/message";
+import CameraCapture from '@/Components/CameraCapture';
+
 import {
   AlertCircle,
   ArrowLeftCircle,
   MessagesSquare,
   SendHorizonal,
+  Camera,
+  Image
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useMutation } from "react-query";
@@ -25,6 +29,9 @@ function Message({
   loading?: boolean;
   isSafe: boolean;
 }) {
+  const imageUrl = msg.imageUrl || (msg.hasImage && msg.imageData ? 
+    `data:image/jpeg;base64,${msg.imageData}` : null);
+
   return (
     <div
       className={cn(
@@ -41,7 +48,22 @@ function Message({
       >
         {msg.usernick}
       </div>
-      {msg.content + `       `}
+      
+      {}
+      {msg.content && <div>{msg.content}</div>}
+      
+      {}
+      {imageUrl && (
+        <div className="mt-2 max-w-full">
+          <img 
+            src={imageUrl} 
+            alt="Message attachment" 
+            className="max-w-full rounded-md max-h-[300px] object-contain"
+            onClick={() => window.open(imageUrl, '_blank')}
+          />
+        </div>
+      )}
+      
       <span className="absolute bottom-0 right-2 text-[10px] text-gray-400 font-light">
         {msg.tod && convertTodToDate(msg.tod)}
       </span>
@@ -55,6 +77,10 @@ function Channel() {
   const { channelName } = useParams();
   const [input, setInput] = useState("");
   const tokenData = useTokenData();
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [isImageUploading, setIsImageUploading] = useState(false);
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const fileInputRef = useRef(null);
   const usernick = `${tokenData?.mtUsername}@${tokenData?.apReg}`;
   const { store, sync } = useSyncStore(() => {
     setTimeout(
@@ -62,7 +88,7 @@ function Channel() {
         messagesRef.current &&
         messagesRef.current.scrollTo({
           top: messagesRef.current.scrollHeight,
-          behavior: "smooth", // Optional: define the scrolling behavior (smooth or auto)
+          behavior: "smooth", 
         }),
       500
     );
@@ -71,103 +97,234 @@ function Channel() {
   const messagesRef = useRef<HTMLDivElement>(null);
 
   const { mutate: sendMessage } = useMutation(
-    ({ messageStr }: { messageStr: string }) => {
+    ({ messageStr, imageData }: { messageStr: string, imageData?: File }) => {
+      const msgContent = messageStr.trim();
+      
       return message({
-        msgContent: messageStr,
-        channel: channelName!,
+        msgContent: msgContent,
+        channel: channelName,
+        imageData: imageData
       });
     },
     {
       onSuccess() {
         sync();
         setLoadingMsg(null);
+        setSelectedImage(null); 
       },
-      onMutate({ messageStr }) {
+      onMutate({ messageStr, imageData }) {
         setInput("");
-        setLoadingMsg({ content: messageStr, usernick });
+        
+        const localImageUrl = imageData ? URL.createObjectURL(imageData) : null;
+        
+        setLoadingMsg({ 
+          content: messageStr, 
+          usernick,
+          imageUrl: localImageUrl
+        });
+        
         setTimeout(
           () =>
             messagesRef.current &&
             messagesRef.current.scrollTo({
               top: messagesRef.current.scrollHeight,
-              behavior: "smooth", // Optional: define the scrolling behavior (smooth or auto)
+              behavior: "smooth",
             }),
-          1000
+          100 
         );
       },
     }
   );
 
+  function handleImageSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    try {
+      setIsImageUploading(true);
+      
+      compressImageForEmergencyNetwork(file)
+        .then(processedImage => {
+          console.log("Image processed, new size:", processedImage.size);
+          setSelectedImage(processedImage);
+        })
+        .catch(error => {
+          console.error("Error processing image:", error);
+          alert("Error processing image: " + error.message);
+        })
+        .finally(() => {
+          setIsImageUploading(false);
+          event.target.value = null;
+        });
+    } catch (error) {
+      console.error("Error selecting image:", error);
+      setIsImageUploading(false);
+      event.target.value = null;
+    }
+  }
+
+
+  function processImage(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          
+          const MAX_WIDTH = 500; 
+          let width = img.width;
+          let height = img.height;
+          
+          if (width > MAX_WIDTH) {
+            height = (MAX_WIDTH / width) * height;
+            width = MAX_WIDTH;
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                const compressedFile = new File([blob], file.name, {
+                  type: 'image/jpeg',
+                  lastModified: Date.now(),
+                });
+                resolve(compressedFile);
+              } else {
+                reject(new Error("Failed to compress image"));
+              }
+            },
+            'image/jpeg',
+            0.3 
+          );
+        };
+        img.onerror = reject;
+        img.src = event.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+
   useEffect(() => {
     messagesRef.current &&
       messagesRef.current.scrollTo({
         top: messagesRef.current.scrollHeight,
-        behavior: "instant", // Optional: define the scrolling behavior (smooth or auto)
+        behavior: "instant", 
       });
   }, [messagesRef.current]);
 
   return (
-    <div className="grid grid-rows-[60px_1fr_60px] h-full ">
-      <div className="border-b border-gray-200 dark:border-gray-600 dark:text-gray-400 flex items-center dark:bg-gray-900 text-lg">
-        <Link
-          className="h-full aspect-square flex items-center justify-center transition-transform duration-100 active:scale-95"
-          to={"/home"}
-        >
-          <ArrowLeftCircle size={35} className="text-gray-400" />
-        </Link>
-        <div className="flex gap-2 items-center ml-2">
-          <MessagesSquare /> {channelName}
-        </div>
-      </div>
-
-      <div
-        className=" shadow-inner flex flex-col gap-4 py-4 px-2 overflow-auto"
-        ref={messagesRef}
-      >
-        {store?.messages?.[channelName!] &&
-          Object.values(store?.messages?.[channelName!])
-            ?.sort((a, b) => a.tod - b.tod)
-            ?.map((msg: any, index) => (
-              <Message
-                msg={msg}
-                my={msg.usernick === usernick}
-                isSafe={msg.isSafe}
-                key={msg.content + msg.usernick + index}
-              />
-            ))}
-        {loadingMsg && (
-          <Message msg={loadingMsg} my={true} loading={true} isSafe />
-        )}
-      </div>
-      <div
-        className={
-          "border-t border-gray-200  dark:border-gray-700 dark:bg-gray-900 "
-        }
-      >
-        <form
-          className="flex items-stretch justify-stretch h-full w-full gap-2 p-2 "
-          onSubmit={(e) => {
-            e.preventDefault();
-            input.length > 0 && sendMessage({ messageStr: input });
-          }}
-        >
-          <Input
-            className={
-              "flex-1 h-full border-2 dark:bg-gray-200 bg-white text-gray-950"
-            }
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-          />
-          <Button
-            type="submit"
-            className=" h-full  aspect-square p-0 transition-transform duration-100 active:scale-95 dark:bg-gray-700 dark:text-gray-100 "
+      <div className="grid grid-rows-[60px_1fr_60px] h-full">
+        <div className="border-b border-gray-200 dark:border-gray-600 dark:text-gray-400 flex items-center dark:bg-gray-900 text-lg">
+          <Link
+            className="h-full aspect-square flex items-center justify-center transition-transform duration-100 active:scale-95"
+            to={"/home"}
           >
-            <SendHorizonal />
-          </Button>
-        </form>
+            <ArrowLeftCircle size={35} className="text-gray-400" />
+          </Link>
+          <div className="flex gap-2 items-center ml-2">
+            <MessagesSquare /> {channelName}
+          </div>
+        </div>
+    
+        <div
+          className="shadow-inner flex flex-col gap-4 py-4 px-2 overflow-auto"
+          ref={messagesRef}
+        >
+          {store?.messages?.[channelName!] &&
+            Object.values(store?.messages?.[channelName!])
+              ?.sort((a, b) => a.tod - b.tod)
+              ?.map((msg: any, index) => (
+                <Message
+                  msg={msg}
+                  my={msg.usernick === usernick}
+                  isSafe={msg.isSafe}
+                  key={msg.content + msg.usernick + index}
+                />
+              ))}
+          {loadingMsg && (
+            <Message msg={loadingMsg} my={true} loading={true} isSafe={true} />
+          )}
+        </div>
+        
+        <div className="border-t border-gray-200 dark:border-gray-700 dark:bg-gray-900">
+          <form
+            className="flex items-stretch justify-stretch h-full w-full gap-2 p-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              (input.length > 0 || selectedImage) && sendMessage({
+                messageStr: input,
+                imageData: selectedImage
+              });
+            }}
+          >
+            {}
+            {selectedImage && (
+              <div className="relative h-full aspect-square">
+                <img
+                  src={URL.createObjectURL(selectedImage)}
+                  className="h-full object-cover rounded-md"
+                  alt="Preview"
+                />
+                <button
+                  className="absolute top-0 right-0 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
+                  onClick={() => setSelectedImage(null)}
+                  type="button"
+                >
+                </button>
+              </div>
+            )}
+    
+            <Input
+              className="flex-1 h-full border-2 dark:bg-gray-200 bg-white text-gray-950"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+            />
+    
+            {}
+            <Button
+              type="button"
+              className="h-full aspect-square p-0 dark:bg-gray-700 dark:text-gray-100"
+              onClick={() => {setIsCameraActive(true)}}
+          >
+              <Camera size={20} />
+            </Button>
+    
+            {}
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              ref={fileInputRef}
+              onChange={handleImageSelect}
+            />
+    
+            <Button
+              type="submit"
+              className="h-full aspect-square p-0 transition-transform duration-100 active:scale-95 dark:bg-gray-700 dark:text-gray-100"
+            >
+              <SendHorizonal />
+            </Button>
+          </form>
+        </div>
+        {isCameraActive && (
+        <CameraCapture
+          onImageCaptured={(capturedImage) => {
+            
+            setSelectedImage(capturedImage);
+            setIsCameraActive(false);
+          }}
+          onCancel={() => setIsCameraActive(false)}
+        />
+      )}
       </div>
-    </div>
-  );
+    );
 }
 
 export default Channel;

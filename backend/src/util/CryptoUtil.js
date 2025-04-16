@@ -1,4 +1,5 @@
 import crypto, { createHash } from "crypto";
+import { webcrypto } from 'crypto';
 import {
   getAdminPublicKey,
   getAdminPrivateKey,
@@ -73,17 +74,58 @@ export function signByAdmin(data) {
   return sign.sign(signAlgorithm, "base64");
 }
 
-export function verify(data, signature, publicKey) {
-  const verify = crypto.createVerify("RSA-SHA256");
-  verify.update(data);
-  const signAlgorithm = {
-    key: publicKey,
-    saltLength: 0,
-    padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-  };
-  const isVerified = verify.verify(signAlgorithm, signature, "base64");
-  return isVerified;
+// export function verify(data, signature, publicKey) {
+//   const verify = crypto.createVerify("RSA-SHA256");
+//   verify.update(data);
+//   const signAlgorithm = {
+//     key: publicKey,
+//     saltLength: 0,
+//     padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+//   };
+//   const isVerified = verify.verify(signAlgorithm, signature, "base64");
+//   return isVerified;
+// }
+
+
+export async function verify(data, signature, publicKey) {
+  try {
+    // Convert public key to correct format
+    const cryptoKey = await webcrypto.subtle.importKey(
+      "spki",
+      publicKey,
+      {
+        name: "RSA-PSS",
+        hash: "SHA-256",
+      },
+      true,
+      ["verify"]
+    );
+    
+    // Encode data consistently
+    const encoder = new TextEncoder();
+    const encodedData = encoder.encode(data);
+    
+    // Decode signature
+    const binarySignature = Buffer.from(signature, 'base64');
+    
+    // Verify with consistent parameters
+    const isValid = await webcrypto.subtle.verify(
+      {
+        name: "RSA-PSS",
+        saltLength: 0,
+      },
+      cryptoKey,
+      binarySignature,
+      encodedData
+    );
+    
+    return isValid;
+  } catch (error) {
+    console.error("Verification error:", error);
+    return false;
+  }
 }
+
 
 export function hashBase64(base64String, algorithm = "sha256") {
   return createHash(algorithm).update(base64String).digest("base64");
@@ -184,10 +226,24 @@ export async function jwkToKeyObject(jwk) {
   return keyObject;
 }
 
-export async function getTokenData(token) {
-  const fragmentedToken = token.split(".");
-  const encodedData = fragmentedToken[0];
-  const data = base64toJson(encodedData);
-  data.mtPubKey = data.mtPubKey.toString().trim();
-  return data;
+export function getTokenData(token) {
+  if (!token) return null;
+  
+  try {
+    const fragmentedToken = token.split(".");
+    if (fragmentedToken.length < 1) return null;
+    
+    const encodedData = fragmentedToken[0];
+    const data = base64toJson(encodedData);
+    
+    if (data && data.mtPubKey) {
+      data.mtPubKey = data.mtPubKey.toString().trim();
+    }
+    
+    console.log("Extracted token data:", data);
+    return data;
+  } catch (error) {
+    console.error("Error extracting token data:", error);
+    return null;
+  }
 }

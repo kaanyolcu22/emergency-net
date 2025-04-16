@@ -27,7 +27,7 @@ class CertifyController {
 
       const { privateKey: privKey, publicKey: pubKey } =
         crypto.generateKeyPairSync("rsa", {
-          modulusLength: 2048, // Length of the key in bits
+          modulusLength: 2048, 
         });
 
       fs.writeFileSync(

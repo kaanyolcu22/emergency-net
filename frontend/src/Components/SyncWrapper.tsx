@@ -1,14 +1,29 @@
-import { Outlet } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router-dom";
 import SyncButton from "./SyncButton";
 import useSyncStore from "@/Hooks/useSyncStore";
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 
-function SyncWrapper() {
-  const [tick, setTick] = useState(false);
-  const { sync, isLoading } = useSyncStore(() => {
+interface SyncWrapperProps {}
+
+const SyncWrapper: React.FC<SyncWrapperProps> = () => {
+  const navigate = useNavigate();
+  const [tick, setTick] = useState<boolean>(false);
+  
+  const onSyncSuccess = useCallback(() => {
     setTick(true);
     setTimeout(() => setTick(false), 100);
-  });
+  }, []);
+  
+  const { sync, isLoading } = useSyncStore(onSyncSuccess);
+  
+  useEffect(() => {
+    const directNavigation = sessionStorage.getItem("direct_home_navigation") === "true";
+    if (directNavigation) {
+      sessionStorage.removeItem("direct_home_navigation");
+      sync();
+    }
+  }, [sync]);
+  
   return (
     <>
       <SyncButton

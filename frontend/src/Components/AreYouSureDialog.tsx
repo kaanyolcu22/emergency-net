@@ -18,22 +18,34 @@ type AreYouSureDialogProps = {
 };
 
 const AreYouSureDialog: React.FC<AreYouSureDialogProps> = ({
-  onAccept: onClick,
+  onAccept,
   title,
   children,
   className,
 }) => {
+  const handleWrapperClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+  };
+
   return (
-    <div className={className} onClick={(e) => e.stopPropagation()}>
+    <div className={className} onClick={handleWrapperClick}>
       <AlertDialog>
-        <AlertDialogTrigger>{children}</AlertDialogTrigger>
+        <AlertDialogTrigger asChild>
+          <button 
+            onClick={handleWrapperClick} 
+            className="p-0 m-0 bg-transparent border-none cursor-pointer"
+          >
+            {children}
+          </button>
+        </AlertDialogTrigger>
+        
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{title}</AlertDialogTitle>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>İptal</AlertDialogCancel>
-            <AlertDialogAction onClick={onClick}>Devam Et</AlertDialogAction>
+            <AlertDialogAction onClick={onAccept}>Devam Et</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

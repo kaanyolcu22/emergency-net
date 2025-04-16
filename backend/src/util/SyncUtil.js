@@ -129,12 +129,15 @@ export async function getMessagesToSend(receivedMessages) {
       isActive: true,
     },
   });
+  
   await Promise.all(
     channels.map(async (channel) => {
       const channelName = channel.channelName;
       try {
         const result = await AppDataSource.manager.find(Message, {
           where: { channel: channelName },
+          select: ["content", "usernick", "origin", "certificate", "hashKey", 
+                  "channel", "tod", "isSafe", "hasImage", "imageData"]
         });
 
         const messageMap = {};
@@ -145,7 +148,8 @@ export async function getMessagesToSend(receivedMessages) {
             !Object.keys(receivedMessages[channelName]).includes(row.hashKey)
           ) {
             const hashkey = row.hashKey;
-            const message = row;
+            // Ensure we're including the full message with image data
+            const message = { ...row };
 
             messageMap[hashkey] = message;
           }
@@ -162,7 +166,6 @@ export async function getMessagesToSend(receivedMessages) {
   );
   return channelMap;
 }
-
 /*export function findMissingMessages(receivedMessages, messageMap) {
   const missingMessages = [];
   receivedMessages.forEach((message) => {

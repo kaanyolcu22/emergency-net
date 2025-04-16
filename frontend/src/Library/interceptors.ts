@@ -34,6 +34,10 @@ export async function MTResponseSigner(content: Record<string, any>) {
   const signature = await sign(MTKey, JSON.stringify(content));
 
   const result: any = { content, signature };
+  console.log("Sending signed data:", {
+    content: JSON.stringify(content),
+    signature: signature.substring(0, 50) + "..." // Just show beginning
+  });
   const cert = await localStorage.getItem("pu_cert");
   if (cert) {
     result.pu_cert = cert;
