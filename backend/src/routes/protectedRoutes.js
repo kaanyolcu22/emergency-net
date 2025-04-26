@@ -1,5 +1,4 @@
 import express from 'express';
-
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { messageController } from '../controller/MessageController.js';
 import { syncController } from "../controller/SyncController.js";
@@ -12,12 +11,9 @@ protectedRouter.use(authMiddleware);
 
 protectedRouter.get("/hello", helloController.hello.bind(helloController));
 protectedRouter.post("/message", messageController.receiveMessage.bind(messageController));
-
 protectedRouter.post("/sync", (req, res, next) => syncController.sync(req, res, next));
-
 protectedRouter.post("/channel", channelController.createChannel.bind(channelController));
 protectedRouter.delete("/channel", channelController.destroyChannel.bind(channelController));
-
 protectedRouter.post("/request-to-certify", certifyController.requestToCertify.bind(certifyController));
 protectedRouter.post("/certify", certifyController.certify.bind(certifyController));
 

@@ -89,37 +89,46 @@ export function signByAdmin(data) {
 
 export async function verify(data, signature, publicKey) {
   try {
-    // Convert public key to correct format
-    const cryptoKey = await webcrypto.subtle.importKey(
-      "spki",
-      publicKey,
-      {
-        name: "RSA-PSS",
-        hash: "SHA-256",
-      },
-      true,
-      ["verify"]
-    );
+    // Handle PEM format keys
+    if (typeof publicKey === 'string' && publicKey.includes('-----BEGIN PUBLIC KEY-----')) {
+      // It's a PEM, extract the base64 part
+      const pemContents = publicKey
+        .replace(/-----BEGIN PUBLIC KEY-----/, '')
+        .replace(/-----END PUBLIC KEY-----/, '')
+        .replace(/\s+/g, '');
+      publicKey = Buffer.from(pemContents, 'base64');
+    }
     
-    // Encode data consistently
+    // Make sure publicKey is properly formatted
+    let keyBuffer;
+    if (typeof publicKey === 'string') {
+      keyBuffer = Buffer.from(publicKey);
+    } else if (Buffer.isBuffer(publicKey)) {
+      keyBuffer = publicKey;
+    } else if (publicKey instanceof ArrayBuffer || publicKey instanceof Uint8Array) {
+      keyBuffer = publicKey;
+    } else {
+      console.error("Invalid public key format:", typeof publicKey);
+      return false;
+    }
+    
+    // Encode data
     const encoder = new TextEncoder();
     const encodedData = encoder.encode(data);
     
     // Decode signature
     const binarySignature = Buffer.from(signature, 'base64');
     
-    // Verify with consistent parameters
-    const isValid = await webcrypto.subtle.verify(
-      {
-        name: "RSA-PSS",
-        saltLength: 0,
-      },
-      cryptoKey,
-      binarySignature,
-      encodedData
-    );
+    // Use Node.js crypto verify instead of WebCrypto
+    const verify = crypto.createVerify("RSA-SHA256");
+    verify.update(data);
+    const signAlgorithm = {
+      key: keyBuffer,
+      saltLength: 0,
+      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+    };
     
-    return isValid;
+    return verify.verify(signAlgorithm, signature, "base64");
   } catch (error) {
     console.error("Verification error:", error);
     return false;

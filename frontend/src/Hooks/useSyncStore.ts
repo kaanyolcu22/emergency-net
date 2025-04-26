@@ -3,10 +3,18 @@ import { sync } from "@/Services/sync";
 import { useQuery, useQueryClient } from "react-query";
 import { getCookie } from "typescript-cookie";
 
+interface RecoveryData {
+  username: string;
+  recoveryKeyHash: string;
+  recoveryKeySalt: string;
+  recoveryKeyUpdatedAt?: string;
+}
+
 interface Store {
   messages: Record<string, Record<string, any>>;
   channels: any[];
   blacklist: any[];
+  recoveryData?: RecoveryData[]; 
 }
 
 interface SyncStoreResult {
@@ -33,13 +41,14 @@ function trimImageDataForSync(store) {
         return channel[b].tod - channel[a].tod;
       });
       
+      // Process each message
       messageKeys.forEach(messageKey => {
         const message = channel[messageKey];
         
         if (message.hasImage && message.imageData) {
           message._originalImageSize = message.imageData.length;
           
-          if (totalImagesSaved >= 5) { 
+          if (totalImagesSaved >= 5) { // Only keep 5 most recent images
             message.imageData = null;
             message._imageRemoved = true;
             totalBytesSaved += message._originalImageSize;
@@ -88,6 +97,28 @@ function preserveLocalImages(originalMessages, updatedMessages) {
   return result;
 }
 
+// Function to merge recovery data, keeping the newest versions
+function mergeRecoveryData(localData: RecoveryData[] = [], newData: RecoveryData[] = []): RecoveryData[] {
+  const mergedMap = new Map<string, RecoveryData>();
+  
+  // Add local data to map
+  localData.forEach(item => {
+    mergedMap.set(item.username, item);
+  });
+  
+  // Update or add new data, keeping the newest version based on recoveryKeyUpdatedAt
+  newData.forEach(item => {
+    const existing = mergedMap.get(item.username);
+    
+    if (!existing || !existing.recoveryKeyUpdatedAt || 
+        (item.recoveryKeyUpdatedAt && new Date(item.recoveryKeyUpdatedAt) > new Date(existing.recoveryKeyUpdatedAt))) {
+      mergedMap.set(item.username, item);
+    }
+  });
+  
+  return Array.from(mergedMap.values());
+}
+
 function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
   const queryClient = useQueryClient();
   const tokenExists = !!getCookie("token");
@@ -113,8 +144,6 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
         }
       }
 
-
-
       try {
         const storeString = localStorage.getItem("store");
         if (storeString) {
@@ -123,12 +152,15 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
           localStore = {
             messages: {},
             channels: [],
-            blacklist: []
+            blacklist: [],
+            recoveryData: []
           };
           localStorage.setItem("store", JSON.stringify(localStore));
         }
 
         console.log("Store structure:", Object.keys(localStore));
+        console.log("Recovery data entries:", localStore.recoveryData?.length || 0);
+        
         if (localStore.messages) {
           console.log("Channel count:", Object.keys(localStore.messages).length);
           Object.keys(localStore.messages).forEach(channelKey => {
@@ -148,12 +180,10 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
             console.log(`Channel ${channelKey}: ${imageCount} images, largest: ${largestImageSize} bytes`);
           });
         }
-       
-
 
       } catch (error) {
         console.error("Error parsing store:", error);
-        localStore = { messages: {}, channels: [], blacklist: [] };
+        localStore = { messages: {}, channels: [], blacklist: [], recoveryData: [] };
       }
       
       const storeSize = calculateStoreSize(localStore);
@@ -169,6 +199,7 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
               messages: localStore.messages || {},
               channels: localStore.channels || [],
               blacklist: localStore.blacklist || [],
+              recoveryData: localStore.recoveryData || [],
               tod: Date.now()
             }
           });
@@ -184,12 +215,13 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
               messages: trimmedStore.messages || {},
               channels: trimmedStore.channels || [],
               blacklist: trimmedStore.blacklist || [],
+              recoveryData: trimmedStore.recoveryData || [], // Include recovery data even when trimming
               tod: Date.now()
             }
           });
         }
         
-        const { missingMessages, unverifiedMessages, channels, blacklist } = syncResponse.content;
+        const { missingMessages, unverifiedMessages, channels, blacklist, recoveryData } = syncResponse.content;
         
         const sterileMessages = removeMessages(
           localStore.messages || {},
@@ -198,12 +230,17 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
         
         const updatedMessages = combineMessages(sterileMessages, missingMessages || {});
         
+        // Merge recovery data
+        const mergedRecovery = mergeRecoveryData(localStore.recoveryData, recoveryData);
+        console.log(`Merged recovery data: ${mergedRecovery.length} entries`);
+        
         const newStore = {
           channels: channels || [],
           messages: usedTrimmedData 
             ? preserveLocalImages(localStore.messages, updatedMessages) 
             : updatedMessages,
-          blacklist: blacklist || []
+          blacklist: blacklist || [],
+          recoveryData: mergedRecovery
         };
         
         localStorage.setItem("store", JSON.stringify(newStore));
@@ -219,6 +256,7 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
             const emergencyStore = {
               channels: localStore.channels || [],
               blacklist: localStore.blacklist || [],
+              recoveryData: localStore.recoveryData || [],
               messages: {},
               tod: Date.now()
             };
@@ -230,7 +268,11 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
             const emergencyNewStore = {
               channels: emergencyResponse.content.channels || localStore.channels || [],
               messages: localStore.messages || {},
-              blacklist: emergencyResponse.content.blacklist || localStore.blacklist || []
+              blacklist: emergencyResponse.content.blacklist || localStore.blacklist || [],
+              recoveryData: mergeRecoveryData(
+                localStore.recoveryData || [], 
+                emergencyResponse.content.recoveryData || []
+              )
             };
             
             localStorage.setItem("store", JSON.stringify(emergencyNewStore));

@@ -10,7 +10,7 @@ import { AppDataSource } from "../database/newDbSetup.js";
 import { BlacklistedPU } from "../database/entity/BlacklistedPU.js";
 
 
-const PUBLIC_ROUTES = ['/get-password', '/register']; 
+const PUBLIC_ROUTES = ['/get-password', '/register'];
 
 export const authMiddleware = async (req, res, next) => {
   if (PUBLIC_ROUTES.includes(req.path)) {

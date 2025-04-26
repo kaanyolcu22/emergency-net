@@ -7,6 +7,7 @@ import SyncWrapper from "./Components/SyncWrapper";
 import PURegister from "./Pages/PURegister";
 import RecoveryWords from "./Pages/RecoveryWords";
 import Recovery from "./Pages/Recovery";
+import CrossAPRecovery from "./Pages/CrossAPRecovery"
 
 export const routes: RouteObject[] = [
   {
@@ -24,6 +25,7 @@ export const routes: RouteObject[] = [
           { path: "home", element: <Home /> },
           { path: "channel/:channelName", element: <Channel /> },
           { path: "/recovery", element: <Recovery /> },
+          { path: "/cross-ap-recovery", element: <CrossAPRecovery /> },
           { path: "/recovery-words", element: <RecoveryWords /> }
         ],
       },

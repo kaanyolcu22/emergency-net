@@ -2,6 +2,7 @@ import { apId } from "../../bin/www.js";
 import { jsonToBase64, sign, signByAdmin } from "./CryptoUtil.js";
 import { getApCert } from "../scripts/readcert.js";
 
+
 export function createToken(mtUsername, mtPubKey) {
   const tod = Date.now();
 
@@ -41,3 +42,5 @@ async function convertCryptoKeyToPem(cryptoKey) {
 
   return `-----BEGIN PUBLIC KEY-----\n${lines}\n-----END PUBLIC KEY-----`;
 }
+
+

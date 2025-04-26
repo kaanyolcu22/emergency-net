@@ -25,34 +25,12 @@ export const User = new EntitySchema({
       type: "datetime",
       nullable: true
     },
-    recoveryVersion: {
-      type: "int",
-      default: 1,
-      nullable: true
-    },
-    recoverySourceAP: {
+    recoverySignature: {
       type: "varchar",
       nullable: true
     },
-    recoveryAttempts: {
-      type: "int",
-      default: 0,
-      nullable: true
-    },
-    lastRecoveryAttempt: {
-      type: "datetime",
-      nullable: true
-    },
-    lastRecoveredAt: {
-      type: "datetime",
-      nullable: true
-    },
-    isRecoveryLocked: {
-      type: "boolean",
-      default: false
-    },
-    recoveryLockExpiresAt: {
-      type: "datetime",
+    recoverySource: {
+      type: "varchar",
       nullable: true
     }
   }

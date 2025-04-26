@@ -8,6 +8,7 @@ import { createToken, generatePUCert } from "../util/RegisterUtils.js";
 import { getAdminPublicKey } from "../scripts/readkeys.js";
 import { useOneTimePassword } from "../util/PasswordUtil.js";
 import { generateRecoveryWords, hashRecoveryPhrase } from "../util/RecoveryUtil.js";
+import { signByAdmin } from "../util/CryptoUtil.js";
 
 export class RegisterController {
   async register(req, res) {
@@ -33,12 +34,25 @@ export class RegisterController {
       const recoveryPhrase = recoveryWords.join(" ");
       
       const { hash: recoveryKeyHash, salt: recoveryKeySalt } = await hashRecoveryPhrase(recoveryPhrase);
-      
-      await AppDataSource.manager.save(User, { 
+
+
+      const recoveryData = {
         username,
         recoveryKeyHash,
         recoveryKeySalt,
         recoveryKeyUpdatedAt: new Date()
+      };
+      
+
+      const recoverySignature = signByAdmin(JSON.stringify(recoveryData));
+
+      await AppDataSource.manager.save(User, { 
+        username,
+        recoveryKeyHash,
+        recoveryKeySalt,
+        recoveryKeyUpdatedAt: new Date(),
+        recoverySignature: recoverySignature,
+        recoverySource: apId
       });
       
       if (otp && useOneTimePassword(otp)) {

@@ -1,15 +1,17 @@
-import { useState } from "react";
+
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/Components/ui/card";
 import { Button } from "@/Components/ui/button";
 import { Input } from "@/Components/ui/input";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/Components/ui/use-toast";
-import { ArrowLeft, KeyRound } from "lucide-react";
+import { ArrowLeft, KeyRound, RefreshCw } from "lucide-react";
 import { useMutation } from "react-query";
-import { recoverIdentity } from "@/Services/recovery"; 
+import { recoverIdentity, checkLocalRecoveryData } from "@/Services/recovery"; 
 import { setCookie } from "typescript-cookie";
 import { emergencySync } from '../Services/sync';
-import axios from "axios";  
+import axios from "axios";
+import useSyncStore from "@/Hooks/useSyncStore";
 
 function Recovery() {
   const navigate = useNavigate();
@@ -17,11 +19,69 @@ function Recovery() {
   const [combinedUsername, setCombinedUsername] = useState("");
   const [words, setWords] = useState(Array(8).fill(""));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [recoveryDataExists, setRecoveryDataExists] = useState(false);
+  const { store, sync, isLoading: isSyncLoading } = useSyncStore();
   
   const handleWordChange = (index, value) => {
     const newWords = [...words];
     newWords[index] = value;
     setWords(newWords);
+  };
+  
+  useEffect(() => {
+    if (!combinedUsername || !combinedUsername.includes('@')) return;
+    
+    const [username, apIdentifier] = combinedUsername.split('@');
+    if (!username || !apIdentifier) return;
+    
+    const exists = checkLocalRecoveryData(username, apIdentifier);
+    setRecoveryDataExists(exists);
+    
+    if (exists) {
+      toast({
+        title: "Kurtarma verisi bulundu!",
+        description: "Bu kullanıcı için yerel kurtarma verileri bulundu.",
+        variant: "default"
+      });
+    }
+  }, [combinedUsername, store]);
+  
+  const forceSync = async () => {
+    toast({
+      title: "Senkronizasyon başlatılıyor...",
+      description: "Kurtarma verileri için senkronizasyon yapılıyor."
+    });
+    
+    try {
+      await sync();
+      
+      if (combinedUsername && combinedUsername.includes('@')) {
+        const [username, apIdentifier] = combinedUsername.split('@');
+        const exists = checkLocalRecoveryData(username, apIdentifier);
+        setRecoveryDataExists(exists);
+        
+        if (exists) {
+          toast({
+            title: "Kurtarma verisi bulundu!",
+            description: "Senkronizasyon sonrası kurtarma verisi bulundu.",
+            variant: "default"
+          });
+        } else {
+          toast({
+            title: "Veri bulunamadı",
+            description: "Senkronizasyon sonrası kurtarma verisi bulunamadı.",
+            variant: "destructive"
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Sync error:", error);
+      toast({
+        title: "Senkronizasyon hatası",
+        description: "Kurtarma verileri alınamadı.",
+        variant: "destructive"
+      });
+    }
   };
   
   const { mutate: recover } = useMutation(
@@ -59,7 +119,6 @@ function Recovery() {
             console.error("Emergency sync failed:", syncError);
           }
           localStorage.setItem("recovery_completed", "true");
-          localStorage.setItem("force_home_navigation", "true");
           
           setTimeout(() => {
             window.location.href = "/";
@@ -72,6 +131,15 @@ function Recovery() {
             variant: "destructive"
           });
         }
+      },
+      onError: (error) => {
+        console.error("Recovery error:", error);
+        toast({
+          title: "Kurtarma hatası",
+          description: error.message || "Kurtarma işlemi başarısız oldu.",
+          variant: "destructive"
+        });
+        setIsSubmitting(false);
       },
       onSettled: () => {
         setIsSubmitting(false);
@@ -111,7 +179,6 @@ function Recovery() {
       return;
     }
     
-    // Check if all words are filled
     if (words.some(word => !word.trim())) {
       toast({
         title: "Hata",
@@ -123,7 +190,6 @@ function Recovery() {
     
     console.log(`Attempting recovery for user: ${username}@${apIdentifier}`);
     
-    // Submit recovery request
     recover({
       username,
       apIdentifier,
@@ -158,18 +224,36 @@ function Recovery() {
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
-              <label className="text-sm font-medium">
-                Kullanıcı Adı
-              </label>
+              <div className="flex justify-between items-center">
+                <label className="text-sm font-medium">
+                  Kullanıcı Adı
+                </label>
+                <Button 
+                  type="button" 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={forceSync}
+                  disabled={isSyncLoading}
+                  className="flex items-center gap-1 text-xs h-7"
+                >
+                  <RefreshCw size={12} className={isSyncLoading ? "animate-spin" : ""} />
+                  Senkronize Et
+                </Button>
+              </div>
               <Input
                 value={combinedUsername}
                 onChange={(e) => setCombinedUsername(e.target.value)}
                 placeholder="Örn: tuna@AP1"
-                className="mt-1"
+                className={`mt-1 ${recoveryDataExists ? "border-green-500" : ""}`}
               />
               <p className="text-xs text-gray-500 mt-1">
                 Kullanıcı adınızı ve kayıt olduğunuz AP kimliğini 'kullanıcı@AP' formatında girin.
               </p>
+              {recoveryDataExists && (
+                <p className="text-xs text-green-600 mt-1">
+                  Bu kullanıcı için kurtarma verileri mevcut!
+                </p>
+              )}
             </div>
             
             <div>
