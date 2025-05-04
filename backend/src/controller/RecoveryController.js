@@ -1,3 +1,4 @@
+// Fix for RecoveryController.js
 import { apId } from "../../bin/www.js";
 import { User } from "../database/entity/User.js";
 import { AppDataSource } from "../database/newDbSetup.js";
@@ -165,8 +166,9 @@ class RecoveryController {
       const keyPair = generateKeyPairFromSeed(keyMaterial);
       const mtPubBuffer = Buffer.from(keyPair.publicKey);
       
-      // Use the username from the found user record
-      const token = createToken(user.username, mtPubBuffer, apIdentifier);
+      // Use the username from the found user record and only pass 2 parameters to createToken
+      // Fix: Remove the third argument (apIdentifier)
+      const token = createToken(user.username, mtPubBuffer);
       
       console.log(`Token being sent: ${token.substring(0, 50)}...`);
       
@@ -213,11 +215,24 @@ class RecoveryController {
     }
 
     try{
-      const request = AppDataSource.manager.findOneBy(RecoveryRequest,{
+      // Fix: Add await here to properly resolve the Promise
+      const request = await AppDataSource.manager.findOneBy(RecoveryRequest, {
         id : recoveryRequestId
-      })
+      });
 
       await cleanupExpiredRequests();
+      
+      if (!request) {
+        return res.status(404).json({
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_RECOVERY_STATUS",
+          status: "not_found",
+          error: "Recovery request not found."
+        });
+      }
+      
       if (request.status === "EXPIRED"){
         return res.status(410).json({
           id: apId,
