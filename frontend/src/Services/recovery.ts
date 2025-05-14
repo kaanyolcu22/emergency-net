@@ -1,9 +1,16 @@
 import { getApiURL } from "@/Library/getApiURL";
-import axios from "axios";  
+import axios, { AxiosError } from "axios";  
 import { setCookie } from "typescript-cookie";
 import { emergencySync } from "./sync";
 
-export async function recoverIdentity(recoveryData) {
+interface RecoveryData {
+  username: string;
+  apIdentifier: string;
+  recoveryWords: string;
+}
+
+
+export async function recoverIdentity(recoveryData: RecoveryData) {
   try {
     const content = {
       username: recoveryData.username,
@@ -41,7 +48,6 @@ export async function recoverIdentity(recoveryData) {
     if (token) {
       console.log("Token found:", token.substring(0, 20) + "...");
       
-      // Store token in both cookie and localStorage for redundancy
       setCookie("token", token, {
         sameSite: "Lax",
         secure: location.protocol === 'https:',
@@ -53,13 +59,11 @@ export async function recoverIdentity(recoveryData) {
       localStorage.setItem("emergency_token", token);
       
       try {
-        // Perform emergency sync to get updated data from the current AP
         console.log("Performing emergency sync after recovery");
         await emergencySync();
         console.log("Emergency sync completed successfully");
       } catch (syncError) {
         console.error("Emergency sync failed:", syncError);
-        // Continue with recovery even if sync fails
       }
       
       return {
@@ -70,21 +74,27 @@ export async function recoverIdentity(recoveryData) {
       console.error("No token found in recovery response");
       throw new Error("Kimlik doğrulama tokeni alınamadı. Lütfen tekrar deneyin.");
     }
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Recovery error:", error);
     
-    // If there's a specific error message from the server, use it
-    if (error.response && error.response.data && error.response.data.error) {
-      throw new Error(error.response.data.error);
+    // TypeScript safe error handling
+    if (axios.isAxiosError(error)) {
+      const axiosError = error as AxiosError;
+      if (axiosError.response?.data && typeof axiosError.response.data === 'object' && 'error' in axiosError.response.data) {
+        const errorData = axiosError.response.data as { error: string };
+        throw new Error(errorData.error);
+    }
     }
     
-    // Otherwise, throw a generic error
+    if (error instanceof Error) {
     throw error;
+    } else {
+      throw new Error("Unknown recovery error occurred");
+    }
   }
 }
 
-// Function to check if a user's recovery data exists in the local store
-export function checkLocalRecoveryData(username, apIdentifier) {
+export function checkLocalRecoveryData(username: string, apIdentifier: string): boolean {
   try {
     const storeString = localStorage.getItem("store");
     if (!storeString) return false;
@@ -92,22 +102,19 @@ export function checkLocalRecoveryData(username, apIdentifier) {
     const store = JSON.parse(storeString);
     if (!store.recoveryData || !Array.isArray(store.recoveryData)) return false;
     
-    // Check for exact username@ap match
     const fullUsername = `${username}@${apIdentifier}`;
     
-    // Check both formats: username@ap and just username
-    return store.recoveryData.some(data => 
+    return store.recoveryData.some((data: any) => 
       data.username === fullUsername || 
       data.username === username
     );
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error checking local recovery data:", error);
     return false;
   }
 }
 
-
-export async function checkRecoveryStatus(recoveryRequestId) {
+export async function checkRecoveryStatus(recoveryRequestId: string) {
   try {
     const response = await axios.post(
       getApiURL() + "/check-recovery-status",
@@ -121,13 +128,13 @@ export async function checkRecoveryStatus(recoveryRequestId) {
       status: response.data.status,
       message: response.data.message
     };
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error checking recovery status:", error);
     throw error;
   }
 }
 
-export async function completeRecovery(recoveryRequestId, recoveryWords) {
+export async function completeRecovery(recoveryRequestId: string, recoveryWords: string) {
   try {
     const response = await axios.post(
       getApiURL() + "/complete-recovery",
@@ -146,7 +153,7 @@ export async function completeRecovery(recoveryRequestId, recoveryWords) {
     } else {
       throw new Error("Token not received");
     }
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error completing recovery:", error);
     throw error;
   }

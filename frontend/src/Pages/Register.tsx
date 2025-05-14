@@ -2,7 +2,7 @@ import { Button } from "@/Components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../Components/ui/card";
 import { Input } from "../Components/ui/input";
 import axios from "axios";
-import { useMutation, useQueryClient } from "react-query";
+import { useMutation } from "react-query";
 import { register } from "@/Services/register";
 import useKeys from "@/Hooks/useKeys";
 import { useState } from "react";
@@ -18,7 +18,6 @@ function Register() {
   const { MTpublic, setAdminKey } = useKeys();
   const [username, setUsername] = useState<string>("");
   const handleError = useErrorToast();
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
   
   const { mutate: sendRegister } = useMutation(

@@ -17,7 +17,6 @@ export const authMiddleware = async (req, res, next) => {
     return next();
   }
 
-  console.log(`Auth middleware for ${req.path}, token exists: ${!!req.header("authorization")}`);
   
   let auth = {
     tokenVerified: false,
@@ -37,7 +36,6 @@ export const authMiddleware = async (req, res, next) => {
     const token = req.header("authorization");
     
     if (!token) {
-      console.log("No token in request");
       if (req.path === '/hello') {
         auth.errorMessage = "Token does not exist";
         req.auth = auth;
@@ -52,7 +50,7 @@ export const authMiddleware = async (req, res, next) => {
     const tokenData = await getTokenData(token);
     console.log("TOKEN DATA: ", tokenData);
 
-    const tokenVerification = verifyToken(token, auth.applicable);
+    const tokenVerification = await verifyToken(token, auth.applicable);
     auth.tokenVerified = tokenVerification.isTokenVerified;
     auth.apVerified = tokenVerification.isApVerified;
     
@@ -68,7 +66,7 @@ export const authMiddleware = async (req, res, next) => {
       console.log(JSON.stringify(req.body.content));
       console.log(req.body.signature);
       console.log(tokenData.mtPubKey);
-      auth.contentVerified = verify(
+      auth.contentVerified = await verify(
         JSON.stringify(req.body.content),
         req.body.signature,
         tokenData.mtPubKey
@@ -118,7 +116,7 @@ export const authMiddleware = async (req, res, next) => {
       }
       
       if (auth.applicable) {
-        auth.puVerified = verify(
+        auth.puVerified = await verify(
           JSON.stringify(puContent),
           puSignature,
           getAdminPublicKey()

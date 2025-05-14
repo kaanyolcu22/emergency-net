@@ -35,8 +35,6 @@ class HelloController {
       }
     }
     
-    // No token or token validation failed - require registration
-    console.log("No token or invalid token - returning status 202");
     return res.status(202).json({
       id: apId,
       tod: tod,

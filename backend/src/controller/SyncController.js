@@ -21,8 +21,6 @@ import { addMissingBlacklistedPUs } from "../util/BlacklistUtil.js";
 import { RecoveryRequest } from "../database/entity/RecoveryRequest.js";
 import { RecoveryResponse } from "../database/entity/RecoveryResponse.js";
 import { User } from "../database/entity/User.js"; 
-import { verify } from "../util/CryptoUtil.js";
-import { getAdminPublicKey } from "../scripts/readkeys.js";
 
 class SyncController {
 

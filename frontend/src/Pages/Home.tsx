@@ -29,15 +29,18 @@ function Home() {
 
 
   console.log("TokenData in Home:", tokenData);
-  const { mutate: addChannel } = useMutation(createChannel, {
-    onSuccess() {
-      sync();
-      setChannelName("");
-    },
-  });
+  const { mutate: addChannel } = useMutation<void, Error, string>(
+    (channelName: string) => createChannel(channelName),
+    {
+      onSuccess() {
+        sync();
+        setChannelName("");
+      },
+    }
+  );
 
-  const { mutate: deleteChannel } = useMutation(
-    (channelName) => {
+  const { mutate: deleteChannel } = useMutation<void, Error, string>(
+    (channelName: string) => {
       console.log("Attempting to delete channel:", channelName);
       return destroyChannel(channelName);
     },
@@ -156,5 +159,3 @@ function Home() {
 }
 
 export default Home;
-
-

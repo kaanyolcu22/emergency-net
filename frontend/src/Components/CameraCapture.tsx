@@ -2,11 +2,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from "@/Components/ui/button";
 import { compressImageForEmergencyNetwork } from "@/Services/message";
+import { CameraCaptureProps } from '@/types';
 
-function CameraCapture({ onImageCaptured, onCancel }) {
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const [stream, setStream] = useState(null);
+function CameraCapture({ onImageCaptured, onCancel }: CameraCaptureProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
@@ -36,16 +37,16 @@ function CameraCapture({ onImageCaptured, onCancel }) {
       setStream(mediaStream);
       setIsCameraActive(true);
       setErrorMessage("");
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Error accessing camera:", err);
-      setErrorMessage("Camera access failed: " + err.message);
+      setErrorMessage("Camera access failed: " + (err instanceof Error ? err.message : "Unknown error"));
     }
   };
 
   const stopCamera = () => {
     console.log("Stopping camera...");
     if (stream) {
-      stream.getTracks().forEach(track => {
+      stream.getTracks().forEach((track: MediaStreamTrack) => {
         console.log("Stopping track:", track.kind);
         track.stop();
       });
@@ -86,6 +87,11 @@ function CameraCapture({ onImageCaptured, onCancel }) {
     
     const context = canvas.getContext('2d');
     
+    if (!context) {
+      console.error("Could not get canvas context");
+      return;
+    }
+    
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     
@@ -104,12 +110,16 @@ function CameraCapture({ onImageCaptured, onCancel }) {
           new File([blob], "camera-capture.jpg", { type: "image/jpeg" })
         );
         
+        if (compressedImage) {
         console.log("Compressed image size:", compressedImage.size);
         onImageCaptured(compressedImage);
         stopCamera();
-      } catch (error) {
+        } else {
+          setErrorMessage("Failed to compress image");
+        }
+      } catch (error: unknown) {
         console.error("Error processing captured image:", error);
-        setErrorMessage("Failed to process image: " + error.message);
+        setErrorMessage("Failed to process image: " + (error instanceof Error ? error.message : "Unknown error"));
       }
     }, 'image/jpeg', 0.8);
   };

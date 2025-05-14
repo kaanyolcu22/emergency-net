@@ -23,11 +23,11 @@ interface SyncStoreResult {
   isLoading: boolean;
 }
 
-function calculateStoreSize(store) {
+function calculateStoreSize( store: Store) {
   return new Blob([JSON.stringify(store)]).size;
 }
 
-function trimImageDataForSync(store) {
+function trimImageDataForSync(store : Store) {
   const trimmedStore = JSON.parse(JSON.stringify(store));
   
   if (trimmedStore.messages) {
@@ -70,7 +70,7 @@ function trimImageDataForSync(store) {
   return trimmedStore;
 }
 
-function preserveLocalImages(originalMessages, updatedMessages) {
+function preserveLocalImages(originalMessages : any , updatedMessages: any) {
   const result = {...updatedMessages};
   
   if (!originalMessages) return result;
@@ -246,7 +246,7 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
         localStorage.setItem("store", JSON.stringify(newStore));
         return newStore;
         
-      } catch (error) {
+      } catch (error : any) {
         console.error("Sync operation failed:", error);
         
         if (error.message && error.message.includes("too large")) {
@@ -294,7 +294,7 @@ function useSyncStore(onSuccess?: () => void) : SyncStoreResult {
       onError: (error) => {
         console.error("Sync query error:", error);
       },
-      retry: (failureCount, error) => {
+      retry: (failureCount, error : any) => {
         if (error.message && error.message.includes("network")) {
           return failureCount < 3;
         }

@@ -89,41 +89,27 @@ export function signByAdmin(data) {
 
 export async function verify(data, signature, publicKey) {
   try {
-    // Handle PEM format keys
     if (typeof publicKey === 'string' && publicKey.includes('-----BEGIN PUBLIC KEY-----')) {
-      // It's a PEM, extract the base64 part
-      const pemContents = publicKey
-        .replace(/-----BEGIN PUBLIC KEY-----/, '')
-        .replace(/-----END PUBLIC KEY-----/, '')
-        .replace(/\s+/g, '');
-      publicKey = Buffer.from(pemContents, 'base64');
+      const pubKeyObj = crypto.createPublicKey({
+        key: publicKey,
+        format: 'pem'
+      });
+
+      const verify = crypto.createVerify("RSA-SHA256");
+      verify.update(data);
+      
+      return verify.verify({
+        key: pubKeyObj,
+        padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+        saltLength: 0
+      }, Buffer.from(signature, 'base64'));
     }
     
-    // Make sure publicKey is properly formatted
-    let keyBuffer;
-    if (typeof publicKey === 'string') {
-      keyBuffer = Buffer.from(publicKey);
-    } else if (Buffer.isBuffer(publicKey)) {
-      keyBuffer = publicKey;
-    } else if (publicKey instanceof ArrayBuffer || publicKey instanceof Uint8Array) {
-      keyBuffer = publicKey;
-    } else {
-      console.error("Invalid public key format:", typeof publicKey);
-      return false;
-    }
-    
-    // Encode data
-    const encoder = new TextEncoder();
-    const encodedData = encoder.encode(data);
-    
-    // Decode signature
-    const binarySignature = Buffer.from(signature, 'base64');
-    
-    // Use Node.js crypto verify instead of WebCrypto
+    // Handle non-PEM keys (existing code path)
     const verify = crypto.createVerify("RSA-SHA256");
     verify.update(data);
     const signAlgorithm = {
-      key: keyBuffer,
+      key: publicKey,
       saltLength: 0,
       padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
     };
@@ -135,7 +121,6 @@ export async function verify(data, signature, publicKey) {
   }
 }
 
-
 export function hashBase64(base64String, algorithm = "sha256") {
   return createHash(algorithm).update(base64String).digest("base64");
 }
@@ -144,8 +129,47 @@ export function hashBase64(base64String, algorithm = "sha256") {
 // TO-DO:: object equality check will be implemented
 export function verifyACAP(encodedData, adminSignature) {
   const stringifiedData = JSON.stringify(base64toJson(encodedData));
-  return verify(stringifiedData, adminSignature, getAdminPublicKey());
+  return verifySync(stringifiedData, adminSignature, getAdminPublicKey());
 }
+
+
+// In CryptoUtil.js
+export function verifySync(data, signature, publicKey) {
+  try {
+    // Handle PEM format keys
+    if (typeof publicKey === 'string' && publicKey.includes('-----BEGIN PUBLIC KEY-----')) {
+      const pubKeyObj = crypto.createPublicKey({
+        key: publicKey,
+        format: 'pem'
+      });
+      
+      const verify = crypto.createVerify("RSA-SHA256");
+      verify.update(data);
+      
+      return verify.verify({
+        key: pubKeyObj,
+        padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+        saltLength: 0
+      }, Buffer.from(signature, 'base64'));
+    }
+    
+    // Handle other formats
+    const verify = crypto.createVerify("RSA-SHA256");
+    verify.update(data);
+    const signAlgorithm = {
+      key: publicKey,
+      saltLength: 0,
+      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+    };
+    
+    return verify.verify(signAlgorithm, signature, "base64");
+  } catch (error) {
+    console.error("Synchronous verification error:", error);
+    return false;
+  }
+}
+
+
 
 // PU-Certified AP
 export function verifyPUAP(
@@ -156,10 +180,10 @@ export function verifyPUAP(
 ) {
   const PUData = base64toJson(encodedPUData);
   const stringifiedPUData = JSON.stringify(PUData);
-  if (verify(stringifiedPUData, adminSignature, getAdminPublicKey())) {
+  if (verifySync(stringifiedPUData, adminSignature, getAdminPublicKey())) {
     const stringifiedAPData = JSON.stringify(base64toJson(encodedAPData));
     const PUkey = PUData.pubKey;
-    return verify(stringifiedAPData, PUsignature, PUkey);
+    return verifySync(stringifiedAPData, PUsignature, PUkey);
   }
   return false;
 }

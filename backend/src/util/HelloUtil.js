@@ -1,6 +1,6 @@
-import { base64toJson, verify, verifyACAP, verifyPUAP } from "./CryptoUtil.js";
+import { base64toJson, verify, verifyACAP, verifyPUAP , verifySync} from "./CryptoUtil.js";
 
-export function verifyAPReg(data, cert) {
+export async function verifyAPReg(data, cert) {
   let isVerified = false;
   const fragmentedCert = cert.split(".");
 
@@ -19,14 +19,14 @@ export function verifyAPReg(data, cert) {
         };
       }
     } else {
-      isVerified = verifyACAP(encodedAPData, adminSignature);
+      isVerified = await verifyACAP(encodedAPData, adminSignature);
     }
   } else if (fragmentedCert.length === 4) {
     encodedAPData = fragmentedCert[0];
     const PUsignature = fragmentedCert[1];
     const encodedPUData = fragmentedCert[2];
     const adminSignature = fragmentedCert[3];
-    isVerified = verifyPUAP(
+    isVerified = await verifyPUAP(
       encodedAPData,
       PUsignature,
       encodedPUData,
@@ -56,7 +56,7 @@ export function verifyAPReg(data, cert) {
   return { isApVerified: "VALID", apPubKey: decodedAPData.apPub };
 }
 
-export function verifyToken(token, isApplicable) {
+export async  function verifyToken(token, isApplicable) {
   const fragmentedToken = token.split(".");
   if (fragmentedToken.length < 3) {
     return {
@@ -71,23 +71,22 @@ export function verifyToken(token, isApplicable) {
 
   const decodedData = base64toJson(encodedData);
   const decodedApData = base64toJson(cert.split(".")[0]);
-  console.log("decodedData " + JSON.stringify(decodedApData));
   if (!isApplicable) {
     const apPubKey = decodedApData.apPub;
-    let isTokenVerified = verify(
+    let isTokenVerified = verifySync(
       JSON.stringify(base64toJson(encodedData)),
       signature,
       apPubKey
     );
     return {
       isApVerified: "NO_CERT",
-      isTokenVerified: isTokenVerified,
+      isTokenVerified,
       mtPubKey: decodedData.mtPubKey ? decodedData.mtPubKey : "",
     };
   }
-  const verificationResult = verifyAPReg(encodedData, cert);
+  const verificationResult = await verifyAPReg(encodedData, cert);
   if (verificationResult.isApVerified === "VALID") {
-    let isTokenVerified = verify(
+    let isTokenVerified = await verify(
       JSON.stringify(base64toJson(encodedData)),
       signature,
       Buffer.from(verificationResult.apPubKey)
@@ -102,14 +101,14 @@ export function verifyToken(token, isApplicable) {
     verificationResult.isApVerified === "NO_CERT" &&
     verificationResult.reason === "No certificate"
   ) {
-    let isTokenVerified = verify(
+    let isTokenVerified = await verify(
       JSON.stringify(base64toJson(encodedData)),
       signature,
       Buffer.from(verificationResult.apPubKey)
     );
     return {
       isApVerified: "NO_CERT",
-      isTokenVerified: isTokenVerified,
+      isTokenVerified,
       mtPubKey: decodedData.mtPubKey ? decodedData.mtPubKey : "",
     };
   }

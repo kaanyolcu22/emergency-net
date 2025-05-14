@@ -1,7 +1,7 @@
 import { Channel } from "../database/entity/Channel.js";
 import { Message } from "../database/entity/Message.js";
 import { AppDataSource } from "../database/newDbSetup.js";
-import { base64toJson, verify, verifyACAP, verifyPUAP } from "./CryptoUtil.js";
+import { base64toJson, verify, verifyACAP, verifyPUAP, verifySync } from "./CryptoUtil.js";
 
 export function verifyMessage(message) {
   const certificate = message.certificate;
@@ -22,7 +22,7 @@ export function verifyMessage(message) {
       usernick: message.usernick,
       origin: message.origin,
     };
-    const isVerified = verify(
+    const isVerified = verifySync(
       JSON.stringify(messageToCheck),
       signature,
       apPubKey
@@ -59,7 +59,7 @@ export function verifyChannel(channel) {
       isActive: channel.isActive,
       tod: channel.tod,
     };
-    const isVerified = verify(JSON.stringify(channelInfo), signature, apPubKey);
+    const isVerified = verifySync(JSON.stringify(channelInfo), signature, apPubKey);
     return {
       isChannelVerified: isVerified,
       isSafe: isSafe,
@@ -121,6 +121,11 @@ export async function getChannelsToSend() {
   return await AppDataSource.getRepository(Channel).find();
 }
 
+/**
+ * Retrieves messages to send based on what the receiver is missing
+ * @param {Object} receivedMessages - Object containing messages already received by channel
+ * @returns {Promise<Object>} Object containing messages to send by channel
+ */
 export async function getMessagesToSend(receivedMessages) {
   const channelMap = {};
 
@@ -132,7 +137,8 @@ export async function getMessagesToSend(receivedMessages) {
   
   await Promise.all(
     channels.map(async (channel) => {
-      const channelName = channel.channelName;
+      const channelName = String(channel.channelName);
+      
       try {
         const result = await AppDataSource.manager.find(Message, {
           where: { channel: channelName },
@@ -143,18 +149,30 @@ export async function getMessagesToSend(receivedMessages) {
         const messageMap = {};
 
         result.forEach((row) => {
-          if (
-            receivedMessages[channelName] === undefined ||
-            !Object.keys(receivedMessages[channelName]).includes(row.hashKey)
-          ) {
-            const hashkey = row.hashKey;
-            // Ensure we're including the full message with image data
+          const hasChannel = 
+            receivedMessages !== null && 
+            typeof receivedMessages === 'object' && 
+            Object.prototype.hasOwnProperty.call(receivedMessages, channelName);
+          
+          let needsToSend = true;
+          
+          if (hasChannel) {
+            const channelMessages = receivedMessages[channelName];
+            if (
+              channelMessages !== null && 
+              typeof channelMessages === 'object' && 
+              Object.prototype.hasOwnProperty.call(channelMessages, row.hashKey)
+            ) {
+              needsToSend = false;
+            }
+          }
+          
+          if (needsToSend) {
+            const hashkey = String(row.hashKey);
             const message = { ...row };
-
             messageMap[hashkey] = message;
           }
         });
-
         channelMap[channelName] = messageMap;
       } catch (error) {
         console.error(
@@ -164,6 +182,7 @@ export async function getMessagesToSend(receivedMessages) {
       }
     })
   );
+  
   return channelMap;
 }
 /*export function findMissingMessages(receivedMessages, messageMap) {
@@ -178,8 +197,9 @@ export async function getMessagesToSend(receivedMessages) {
 
 export async function findMissingMessages(receivedMessages) {
   const missingMessages = [];
-
-  await receivedMessages.forEach(async (message) => {
+  
+  // Use Promise.all to properly wait for all async operations
+  await Promise.all(receivedMessages.map(async (message) => {
     try {
       const result = await AppDataSource.manager.findOneBy(Message, {
         hashKey: message.hashKey,
@@ -191,7 +211,8 @@ export async function findMissingMessages(receivedMessages) {
       console.log("Error while finding message");
       throw error;
     }
-  });
+  }));
+  
   return missingMessages;
 }
 

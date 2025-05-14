@@ -2,12 +2,23 @@ import { getApiURL } from "@/Library/getApiURL";
 import { APResponseVerifier, MTResponseSigner } from "@/Library/interceptors";
 import axios from "axios";
 
+interface CustomProgressEvent {
+  loaded: number;
+  total?: number;
+}
+
+interface RecoveryRequest {
+  id: string;
+  status: string;
+  responseReceived?: boolean;
+  responseData?: any;
+  expiresAt: string;
+}
 
 export async function emergencySync() {
   try {
     console.log("Starting emergency sync...");
     
-    // Create minimal store with only essential data
     const minimalStore = {
       messages: {},
       channels: [],
@@ -16,18 +27,16 @@ export async function emergencySync() {
       tod: Date.now()
     };
     
-    // Use the existing sync function but with minimal data
+
     const response = await sync({ 
       localStore: minimalStore
     });
     
-    // Only update essential data in localStorage
     try {
       const storeString = localStorage.getItem("store");
       if (storeString) {
         const currentStore = JSON.parse(storeString);
         
-        // Update only channels and blacklist, preserve messages
         const updatedStore = {
           messages: currentStore.messages || {},
           channels: response.content.channels || currentStore.channels || [],
@@ -78,8 +87,12 @@ export async function sync({ localStore }: { localStore: any }) {
       signedData,
       {
         timeout: 30000,
-        onUploadProgress: (progressEvent) => {
+        onUploadProgress: (progressEvent: CustomProgressEvent) => {
+          if (progressEvent.total) {
           console.log(`Upload progress: ${Math.round(progressEvent.loaded / progressEvent.total * 100)}%`);
+          } else {
+            console.log(`Uploaded ${progressEvent.loaded} bytes`);
+          }
         }
       }
     );
@@ -118,7 +131,7 @@ export async function sync({ localStore }: { localStore: any }) {
   }
 }
 
-function processRecoveryResponses(responses) {
+function processRecoveryResponses(responses: any[]) {
   if (!responses || responses.length === 0) return;
   
   try {
@@ -148,7 +161,7 @@ function processRecoveryResponses(responses) {
   }
 }
 
-export function addRecoveryRequest(request) {
+export function addRecoveryRequest(request: any) {
   try {
     const pendingRequests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
     pendingRequests.push(request);
@@ -161,7 +174,7 @@ export function addRecoveryRequest(request) {
   }
 }
 
-export function addRecoveryResponse(response) {
+export function addRecoveryResponse(response: any) {
   try {
     const pendingResponses = JSON.parse(localStorage.getItem("pendingRecoveryResponses") || "[]");
     pendingResponses.push(response);
@@ -175,10 +188,10 @@ export function addRecoveryResponse(response) {
 }
 
 
-export function getRecoveryRequestStatus(requestId) {
+export function getRecoveryRequestStatus(requestId: string) {
   try {
     const pendingRequests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
-    const request = pendingRequests.find(req => req.id === requestId);
+    const request = pendingRequests.find((req: RecoveryRequest) => req.id === requestId);
     
     if (!request) {
       console.log(`Recovery request ${requestId} not found`);
@@ -202,7 +215,7 @@ export function cleanupRecoveryData() {
   try {
     const now = new Date().toISOString();
     const pendingRequests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
-    const updatedRequests = pendingRequests.filter(req => {
+    const updatedRequests = pendingRequests.filter((req: RecoveryRequest) => {
       return req.status !== "COMPLETED" && new Date(req.expiresAt) > new Date(now);
     });
     

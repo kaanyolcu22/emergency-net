@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { getCookie } from "typescript-cookie";
+import { getCookie, setCookie} from "typescript-cookie";
 import axios from "axios";
 import useErrorToast from "@/Hooks/useErrorToast";
 import { verifyApCert } from "@/Library/cert";
@@ -11,8 +11,17 @@ import { hello } from "@/Services/hello";
 import { Button } from "./ui/button";
 import { logout } from "@/Library/util";
 
-const TokenDataContext = createContext(null);
-const TokenDataUpdateContext = createContext((data) => {});
+// Define the TokenData interface
+interface TokenData {
+  mtUsername?: string;
+  apReg?: string;
+  mtPubKey?: string;
+  todReg?: number;
+  // Add other properties your token might have
+}
+
+const TokenDataContext = createContext<TokenData | null>(null);
+const TokenDataUpdateContext = createContext<React.Dispatch<React.SetStateAction<TokenData | null>>>(() => {});
 
 export const useTokenData = () => useContext(TokenDataContext);
 export const useTokenDataUpdate = () => useContext(TokenDataUpdateContext);
@@ -22,7 +31,7 @@ function HelloWrapper() {
   const location = useLocation();
   const handleError = useErrorToast();
   const [loading, setLoading] = useState(true);
-  const [tokenData, setTokenData] = useState(null);
+  const [tokenData, setTokenData] = useState<TokenData | null>(null);
 
   useEffect(() => {
     const initializeApp = async () => {
@@ -37,24 +46,25 @@ function HelloWrapper() {
         
         if (!token && localStorage.getItem("emergency_token")) {
           console.log("Using emergency token from localStorage");
-          token = localStorage.getItem("emergency_token");
-          
+          token = localStorage.getItem("emergency_token") || undefined;
+          if (token) { 
           setCookie("token", token, {
             sameSite: "Lax",
-            secure: location.protocol === 'https:',
+              secure: location.pathname.startsWith('https:'), // Fix for protocol access
             expires: 365,
             path: '/'
           });
         }
+        }
         
         if (token) {
           console.log("Token found, setting in axios headers");
-          axios.defaults.headers.common.Authorization = token;
+          axios.defaults.headers.common["Authorization"] = token;
           
           try {
             const data = getTokenData(token);
             console.log("Token data:", data);
-            setTokenData(data);
+            setTokenData(data as TokenData); // Type assertion
           } catch (error) {
             console.error("Error parsing token data:", error);
           }
@@ -89,13 +99,17 @@ function HelloWrapper() {
               navigate("/home");
             }
           }
-        } catch (error) {
+        } catch (error: unknown) {
           console.error("Error in hello call:", error);
           
-          if (error.response && error.response.status === 400) {
+          // Proper error type handling
+          const axiosError = error as { response?: { status: number } };
+          
+          if (axiosError.response && axiosError.response.status === 400) {
             console.log("Token invalid, clearing and trying without token");
             
-            removeCookie("token", { path: '/' });
+            // Use imported setCookie and proper cookie removal
+            setCookie("token", "", { path: '/', expires: -1 });
             localStorage.removeItem("emergency_token");
             delete axios.defaults.headers.common['Authorization'];
             
@@ -114,7 +128,8 @@ function HelloWrapper() {
               navigate("/register");
             }
           } else {
-            handleError(error);
+            // Properly handle error for useErrorToast by casting
+            handleError(error instanceof Error ? error.message : "Unknown error");
             if (location.pathname !== "/recovery") {
               navigate("/register");
             }
