@@ -5,7 +5,9 @@ import { AppDataSource } from "../database/newDbSetup.js";
 import { 
   verifyRecoveryPhrase, 
   deriveKeyFromRecoveryPhrase, 
-  generateKeyPairFromSeed 
+  generateKeyPairFromSeed ,
+  hashRecoveryPhrase,
+  generateRecoveryWords
 } from "../util/RecoveryUtil.js";
 import { createToken } from "../util/RegisterUtils.js";
 import { checkTod } from "../util/Util.js";
@@ -17,6 +19,7 @@ import { cleanupExpiredRequests,
   processIncomingRecoveryResponses
 } from "../util/CrossApRecoveryUtil.js";
 import { RecoveryRequest } from "../database/entity/RecoveryRequest.js";
+import { generateEphemeralKeyPair } from "../util/CrossApRecoveryUtil.js";
 
 class RecoveryController {
 
@@ -370,6 +373,96 @@ class RecoveryController {
     }
   }
 
+  // Add to RecoveryController.js
+
+async initiateBackgroundRecovery(req, res) {
+  const tod_received = req.body.tod;
+  if (!checkTod(tod_received)) {
+    return res.status(408).json({
+      id: apId,
+      tod: Date.now(),
+      priority: -1,
+      type: "MT_TEMP_RECOVERY_RJT",
+      error: "Timeout error."
+    });
+  }
+
+  const { username, apIdentifier, recoveryWords, tempUsername } = req.body;
+  
+  if (!username || !apIdentifier || !recoveryWords || !tempUsername) {
+    return res.status(400).json({
+      id: apId,
+      tod: Date.now(),
+      priority: -1,
+      type: "MT_TEMP_RECOVERY_RJT",
+      error: "Missing required fields."
+    });
+  }
+  
+  try {
+    // First check if the temporary username is already taken
+    const existingUser = await AppDataSource.manager.findOneBy(User, { 
+      username: tempUsername 
+    });
+    
+    if (existingUser) {
+      return res.status(409).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_TEMP_RECOVERY_RJT",
+        error: "Temporary username already exists. Please choose another one."
+      });
+    }
+    
+    // Generate recovery words for the temporary account
+    const tempRecoveryWords = generateRecoveryWords();
+    const tempRecoveryPhrase = tempRecoveryWords.join(" ");
+    const { hash, salt } = await hashRecoveryPhrase(tempRecoveryPhrase);
+    
+    // Generate keys for the temporary user
+    const keyPair = await generateEphemeralKeyPair();
+    const mtPubBuffer = Buffer.from(keyPair.publicKey);
+    
+    // Create a token for the temporary user
+    const tempToken = createToken(tempUsername, mtPubBuffer);
+    
+    // Save the temporary user
+    await AppDataSource.manager.save(User, { 
+      username: tempUsername,
+      recoveryKeyHash: hash,
+      recoveryKeySalt: salt,
+      recoveryKeyUpdatedAt: new Date()
+    });
+    
+    // Now initiate background recovery request
+    const { requestId } = await createRecoveryRequest(
+      username,
+      apIdentifier,
+      recoveryWords
+    );
+    
+    return res.status(200).json({
+      id: apId,
+      tod: Date.now(),
+      priority: -1,
+      type: "MT_TEMP_RECOVERY_ACK",
+      token: tempToken,
+      recoveryRequestId: requestId,
+      tempRecoveryWords: tempRecoveryWords,
+      adminPubKey: getAdminPublicKey().toString()
+    });
+  } catch (error) {
+    console.error("Error in background recovery:", error);
+    return res.status(500).json({
+      id: apId,
+      tod: Date.now(),
+      priority: -1,
+      type: "MT_TEMP_RECOVERY_RJT",
+      error: error.message || "Internal server error during temporary registration."
+    });
+  }
+  }
 }
 
 export const recoveryController = new RecoveryController();

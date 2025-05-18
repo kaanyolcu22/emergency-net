@@ -11,6 +11,7 @@ import { recoverIdentity, checkLocalRecoveryData } from "@/Services/recovery";
 import { setCookie } from "typescript-cookie";
 import { emergencySync } from '../Services/sync';
 import axios from "axios";
+import { UserPlus } from "lucide-react";
 import useSyncStore from "@/Hooks/useSyncStore";
 
 function Recovery() {
@@ -22,7 +23,7 @@ function Recovery() {
   const [recoveryDataExists, setRecoveryDataExists] = useState(false);
   const { store, sync, isLoading: isSyncLoading } = useSyncStore();
   
-  const handleWordChange = (index, value) => {
+  const handleWordChange = (index: any, value: any) => {
     const newWords = [...words];
     newWords[index] = value;
     setWords(newWords);
@@ -132,7 +133,7 @@ function Recovery() {
           });
         }
       },
-      onError: (error) => {
+      onError: (error : any) => {
         console.error("Recovery error:", error);
         toast({
           title: "Kurtarma hatası",
@@ -147,7 +148,7 @@ function Recovery() {
     }
   );
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e : any) => {
     e.preventDefault();
     
     if (!combinedUsername.trim()) {
@@ -274,7 +275,25 @@ function Recovery() {
                 ))}
               </div>
             </div>
-            
+            <div className="flex gap-2 mt-4">
+              <Button 
+                type="submit" 
+                className="flex-1"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? "İşleniyor..." : "Kimliği Kurtar"}
+              </Button>
+              
+              <Button 
+                type="button"
+                variant="outline"
+                className="flex items-center gap-2"
+                onClick={() => navigate("/temp-recovery")}
+              >
+                <UserPlus size={16} />
+                Geçici Kimlik Kullan
+              </Button>
+            </div>
             <Button 
               type="submit" 
               className="mt-2"
