@@ -7,12 +7,26 @@ interface CustomProgressEvent {
   total?: number;
 }
 
-interface RecoveryRequest {
-  id: string;
+interface CrossAPRequest {
+  tempUserId: string;
+  requestingApId: string;
+  destinationApId: string;
+  hash: string;
+  realUserId: string;
+  sourceApId: string;
+  ephemeralPublicKey: string;
+  timestamp: number;
   status: string;
-  responseReceived?: boolean;
-  responseData?: any;
   expiresAt: string;
+}
+
+interface CrossAPResponse {
+  tempUserId: string;
+  encryptedTokenData: string;
+  requestingApId: string;
+  sourceApId: string;
+  signature: string;
+  createdAt: string;
 }
 
 export async function emergencySync() {
@@ -24,9 +38,10 @@ export async function emergencySync() {
       channels: [],
       blacklist: [],
       recoveryData: [],
+      crossAPRequests: [],
+      crossAPResponses: [],
       tod: Date.now()
     };
-    
 
     const response = await sync({ 
       localStore: minimalStore
@@ -41,7 +56,9 @@ export async function emergencySync() {
           messages: currentStore.messages || {},
           channels: response.content.channels || currentStore.channels || [],
           blacklist: response.content.blacklist || currentStore.blacklist || [],
-          recoveryData: response.content.recoveryData || currentStore.recoveryData || []
+          recoveryData: response.content.recoveryData || currentStore.recoveryData || [],
+          crossAPRequests: response.content.crossAPRequests || [],
+          crossAPResponses: response.content.crossAPResponses || []
         };
         
         localStorage.setItem("store", JSON.stringify(updatedStore));
@@ -58,25 +75,24 @@ export async function emergencySync() {
   }
 }
 
-
 export async function sync({ localStore }: { localStore: any }) {
   console.log("Starting enhanced sync operation...");
   
   try {
     console.log("Preparing to sign data for sync...");
-    const recoveryRequests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
-    const recoveryResponses = JSON.parse(localStorage.getItem("pendingRecoveryResponses") || "[]");
+    const crossAPRequests = JSON.parse(localStorage.getItem("pendingCrossAPRequests") || "[]");
+    const crossAPResponses = JSON.parse(localStorage.getItem("pendingCrossAPResponses") || "[]");
     
     const syncPayload = {
       messages: localStore.messages || {},
       channels: localStore.channels || [],
       blacklist: localStore.blacklist || [],
-      recoveryRequests: recoveryRequests || [],
-      recoveryResponses: recoveryResponses || [],
+      crossAPRequests: crossAPRequests || [],
+      crossAPResponses: crossAPResponses || [],
       tod: Date.now() 
     };
     
-    console.log(`Including ${recoveryRequests.length} recovery requests and ${recoveryResponses.length} recovery responses in sync`);
+    console.log(`Including ${crossAPRequests.length} cross-AP requests and ${crossAPResponses.length} cross-AP responses in sync`);
     
     const signedData = await MTResponseSigner(syncPayload);
     console.log("Data signed successfully");
@@ -89,7 +105,7 @@ export async function sync({ localStore }: { localStore: any }) {
         timeout: 30000,
         onUploadProgress: (progressEvent: CustomProgressEvent) => {
           if (progressEvent.total) {
-          console.log(`Upload progress: ${Math.round(progressEvent.loaded / progressEvent.total * 100)}%`);
+            console.log(`Upload progress: ${Math.round(progressEvent.loaded / progressEvent.total * 100)}%`);
           } else {
             console.log(`Uploaded ${progressEvent.loaded} bytes`);
           }
@@ -102,15 +118,15 @@ export async function sync({ localStore }: { localStore: any }) {
     const verifiedResponse = await APResponseVerifier(response.data);
     
     if (verifiedResponse.content) {
-      if (verifiedResponse.content.recoveryRequests && Array.isArray(verifiedResponse.content.recoveryRequests)) {
-        console.log(`Received ${verifiedResponse.content.recoveryRequests.length} recovery requests`);
-        localStorage.setItem("receivedRecoveryRequests", JSON.stringify(verifiedResponse.content.recoveryRequests));
+      if (verifiedResponse.content.crossAPRequests && Array.isArray(verifiedResponse.content.crossAPRequests)) {
+        console.log(`Received ${verifiedResponse.content.crossAPRequests.length} cross-AP requests`);
+        localStorage.setItem("receivedCrossAPRequests", JSON.stringify(verifiedResponse.content.crossAPRequests));
       }
       
-      if (verifiedResponse.content.recoveryResponses && Array.isArray(verifiedResponse.content.recoveryResponses)) {
-        console.log(`Received ${verifiedResponse.content.recoveryResponses.length} recovery responses`);
-        localStorage.setItem("receivedRecoveryResponses", JSON.stringify(verifiedResponse.content.recoveryResponses));
-        processRecoveryResponses(verifiedResponse.content.recoveryResponses);
+      if (verifiedResponse.content.crossAPResponses && Array.isArray(verifiedResponse.content.crossAPResponses)) {
+        console.log(`Received ${verifiedResponse.content.crossAPResponses.length} cross-AP responses`);
+        localStorage.setItem("receivedCrossAPResponses", JSON.stringify(verifiedResponse.content.crossAPResponses));
+        processCrossAPResponses(verifiedResponse.content.crossAPResponses);
       }
     }
     
@@ -131,16 +147,16 @@ export async function sync({ localStore }: { localStore: any }) {
   }
 }
 
-function processRecoveryResponses(responses: any[]) {
+function processCrossAPResponses(responses: CrossAPResponse[]) {
   if (!responses || responses.length === 0) return;
   
   try {
-    const pendingRequests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
+    const pendingRequests = JSON.parse(localStorage.getItem("pendingCrossAPRequests") || "[]");
     const updatedRequests = [...pendingRequests];
     let hasChanges = false;
     
     for (const response of responses) {
-      const requestIndex = updatedRequests.findIndex(req => req.id === response.requestId);
+      const requestIndex = updatedRequests.findIndex((req: CrossAPRequest) => req.tempUserId === response.tempUserId);
       
       if (requestIndex >= 0) {
         updatedRequests[requestIndex].status = "COMPLETED";
@@ -148,107 +164,106 @@ function processRecoveryResponses(responses: any[]) {
         updatedRequests[requestIndex].responseData = response;
         hasChanges = true;
         
-        console.log(`Matched response to request ${response.requestId}`);
+        console.log(`Matched response to request ${response.tempUserId}`);
       }
     }
   
     if (hasChanges) {
-      localStorage.setItem("pendingRecoveryRequests", JSON.stringify(updatedRequests));
-      console.log("Updated pending recovery requests with response data");
+      localStorage.setItem("pendingCrossAPRequests", JSON.stringify(updatedRequests));
+      console.log("Updated pending cross-AP requests with response data");
     }
   } catch (error) {
-    console.error("Error processing recovery responses:", error);
+    console.error("Error processing cross-AP responses:", error);
   }
 }
 
-export function addRecoveryRequest(request: any) {
+export function addCrossAPRequest(request: CrossAPRequest) {
   try {
-    const pendingRequests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
+    const pendingRequests = JSON.parse(localStorage.getItem("pendingCrossAPRequests") || "[]");
     pendingRequests.push(request);
-    localStorage.setItem("pendingRecoveryRequests", JSON.stringify(pendingRequests));
-    console.log(`Added recovery request ${request.id} to pending requests`);
+    localStorage.setItem("pendingCrossAPRequests", JSON.stringify(pendingRequests));
+    console.log(`Added cross-AP request ${request.tempUserId} to pending requests`);
     return true;
   } catch (error) {
-    console.error("Error adding recovery request:", error);
+    console.error("Error adding cross-AP request:", error);
     return false;
   }
 }
 
-export function addRecoveryResponse(response: any) {
+export function addCrossAPResponse(response: CrossAPResponse) {
   try {
-    const pendingResponses = JSON.parse(localStorage.getItem("pendingRecoveryResponses") || "[]");
+    const pendingResponses = JSON.parse(localStorage.getItem("pendingCrossAPResponses") || "[]");
     pendingResponses.push(response);
-    localStorage.setItem("pendingRecoveryResponses", JSON.stringify(pendingResponses));
-    console.log(`Added recovery response for request ${response.requestId} to pending responses`);
+    localStorage.setItem("pendingCrossAPResponses", JSON.stringify(pendingResponses));
+    console.log(`Added cross-AP response for request ${response.tempUserId} to pending responses`);
     return true;
   } catch (error) {
-    console.error("Error adding recovery response:", error);
+    console.error("Error adding cross-AP response:", error);
     return false;
   }
 }
 
-
-export function getRecoveryRequestStatus(requestId: string) {
+export function getCrossAPRequestStatus(tempUserId: string) {
   try {
-    const pendingRequests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
-    const request = pendingRequests.find((req: RecoveryRequest) => req.id === requestId);
+    const pendingRequests = JSON.parse(localStorage.getItem("pendingCrossAPRequests") || "[]");
+    const request = pendingRequests.find((req: CrossAPRequest) => req.tempUserId === tempUserId);
     
     if (!request) {
-      console.log(`Recovery request ${requestId} not found`);
+      console.log(`Cross-AP request ${tempUserId} not found`);
       return null;
     }
     
     return {
-      id: request.id,
+      tempUserId: request.tempUserId,
       status: request.status,
       responseReceived: !!request.responseReceived,
-      createdAt: request.createdAt,
+      timestamp: request.timestamp,
       expiresAt: request.expiresAt
     };
   } catch (error) {
-    console.error("Error getting recovery request status:", error);
+    console.error("Error getting cross-AP request status:", error);
     return null;
   }
 }
 
-export function cleanupRecoveryData() {
+export function cleanupCrossAPData() {
   try {
     const now = new Date().toISOString();
-    const pendingRequests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
-    const updatedRequests = pendingRequests.filter((req: RecoveryRequest) => {
+    const pendingRequests = JSON.parse(localStorage.getItem("pendingCrossAPRequests") || "[]");
+    const updatedRequests = pendingRequests.filter((req: CrossAPRequest) => {
       return req.status !== "COMPLETED" && new Date(req.expiresAt) > new Date(now);
     });
     
-    localStorage.setItem("pendingRecoveryRequests", JSON.stringify(updatedRequests));
-    localStorage.setItem("pendingRecoveryResponses", "[]");
+    localStorage.setItem("pendingCrossAPRequests", JSON.stringify(updatedRequests));
+    localStorage.setItem("pendingCrossAPResponses", "[]");
     
-    console.log(`Cleaned up recovery data. Remaining requests: ${updatedRequests.length}`);
+    console.log(`Cleaned up cross-AP data. Remaining requests: ${updatedRequests.length}`);
   } catch (error) {
-    console.error("Error cleaning up recovery data:", error);
+    console.error("Error cleaning up cross-AP data:", error);
   }
 }
 
-export async function syncRecoveryData() {
+export async function syncCrossAPData() {
   try {
-    const requests = JSON.parse(localStorage.getItem("pendingRecoveryRequests") || "[]");
-    const responses = JSON.parse(localStorage.getItem("pendingRecoveryResponses") || "[]");
+    const requests = JSON.parse(localStorage.getItem("pendingCrossAPRequests") || "[]");
+    const responses = JSON.parse(localStorage.getItem("pendingCrossAPResponses") || "[]");
     
     if (requests.length === 0 && responses.length === 0) {
       return { noData: true };
     }
     
     const response = await axios.post(
-      getApiURL() + "/recovery-sync",
+      getApiURL() + "/cross-ap-recovery-sync",
       {
-        recoveryRequests: requests,
-        recoveryResponses: responses,
+        crossAPRequests: requests,
+        crossAPResponses: responses,
         tod: Date.now()
       }
     );
     
     return response.data;
   } catch (error) {
-    console.error("Recovery sync error:", error);
+    console.error("Cross-AP sync error:", error);
     throw error;
   }
 }

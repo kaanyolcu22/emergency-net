@@ -1,4 +1,3 @@
-// Fix for RecoveryController.js
 import { apId } from "../../bin/www.js";
 import { User } from "../database/entity/User.js";
 import { AppDataSource } from "../database/newDbSetup.js";
@@ -11,73 +10,20 @@ import {
 } from "../util/RecoveryUtil.js";
 import { createToken } from "../util/RegisterUtils.js";
 import { checkTod } from "../util/Util.js";
-import { getAdminPublicKey } from "../scripts/readkeys.js";
-import { cleanupExpiredRequests, 
-  createRecoveryRequest, 
-  completeRecovery, 
-  processIncomingRecoveryRequests,
-  processIncomingRecoveryResponses
+import { getAdminPublicKey, getPublicKey } from "../scripts/readkeys.js";
+import { 
+  processIncomingCrossAPRequests,
+  processIncomingCrossAPResponses,
+  cleanupExpiredRequests,
+  createCrossAPResponse
 } from "../util/CrossApRecoveryUtil.js";
-import { RecoveryRequest } from "../database/entity/RecoveryRequest.js";
-import { generateEphemeralKeyPair } from "../util/CrossApRecoveryUtil.js";
+import { CrossAPRecoveryRequest } from "../database/entity/CrossApRecoveryRequest.js";
+import { CrossAPRecoveryResponse } from "../database/entity/CrossApRecoveryResponse.js";
+import { base64toJson, privateDecrypt } from "../util/CryptoUtil.js";
 
 class RecoveryController {
 
-  async initialRecovery(req,res){
-    const tod_received = req.body.tod;
-    if (!checkTod(tod_received)) {
-      return res.status(408).json({
-        id: apId,
-        tod: Date.now(),
-        priority: -1,
-        type: "MT_RECOVERY_RJT",
-        error: "Timeout error."
-      });
-    }
-
-    const { username, apIdentifier, recoveryWords } = req.body;
-
-    if (!username || !apIdentifier || !recoveryWords) {
-      return res.status(400).json({
-        id: apId,
-        tod: Date.now(),
-        priority: -1,
-        type: "MT_RECOVERY_RJT",
-        error: "Missing required fields."
-      });
-    }
-
-    try{
-        if(apIdentifier == apId){
-           return this.recoverIdentity(req,res);
-        }
-        console.log(`Initiating cross-AP recovery for user: ${username}@${apIdentifier}`);
-        const { requestId } = await createRecoveryRequest(
-          username,
-          apIdentifier,
-          recoveryWords
-        );
-        return res.status(202).json({
-          id: apId,
-          tod: Date.now(),
-          priority: -1,
-          type: "MT_RECOVERY_INITIATED",
-          recoveryRequestId: requestId,
-          message: "Recovery request initiated. Check status using /check-recovery-status."
-        });
-    }
-    catch(error){
-      console.error("Recovery initiation error:", error);
-      return res.status(500).json({
-        id: apId,
-        tod: Date.now(),
-        priority: -1,
-        type: "MT_RECOVERY_RJT",
-        error: "Internal server error during recovery initiation."
-      });
-    }
-  }
-
+  // Local recovery - same AP
   async recoverIdentity(req, res) {
     const tod_received = req.body.tod;
     if (!checkTod(tod_received)) {
@@ -89,9 +35,9 @@ class RecoveryController {
         error: "Timeout error."
       });
     }
-    
+
     const { username, apIdentifier, recoveryWords } = req.body;
-    
+
     if (!username || !apIdentifier || !recoveryWords) {
       return res.status(400).json({
         id: apId,
@@ -101,44 +47,41 @@ class RecoveryController {
         error: "Missing required fields."
       });
     }
+
     try {
+      if (apIdentifier !== apId) {
+        return res.status(400).json({
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_RECOVERY_RJT",
+          error: "User not registered at this AP. Use cross-AP recovery."
+        });
+      }
+
       const fullUsername = `${username}@${apIdentifier}`;
       
-      console.log(`Looking up user: ${fullUsername}`);
-      
-      // Try to find user with combined username first
       let user = await AppDataSource.manager.findOneBy(User, { 
         username: fullUsername 
       });
       
-      // If not found, try just the username (without AP)
       if (!user) {
-        console.log(`User ${fullUsername} not found, trying just username: ${username}`);
         user = await AppDataSource.manager.findOneBy(User, {
           username: username
         });
       }
       
       if (!user) {
-        console.log(`User not found with either format. Available users:`);
-        const allUsers = await AppDataSource.manager.find(User, {});
-        console.log(allUsers.map(u => u.username));
-        
         return res.status(404).json({
           id: apId,
           tod: Date.now(),
           priority: -1,
           type: "MT_RECOVERY_RJT",
-          error: "User not found. Recovery failed."
+          error: "User not found."
         });
       }
       
-      console.log(`User found: ${user.username}, validating recovery phrase`);
-      console.log(`User data: recoveryKeyHash exists: ${!!user.recoveryKeyHash}, recoveryKeySalt exists: ${!!user.recoveryKeySalt}`);
-      
-      // Check if recovery data exists
       if (!user.recoveryKeyHash || !user.recoveryKeySalt) {
-        console.error("User doesn't have recovery data stored");
         return res.status(400).json({
           id: apId,
           tod: Date.now(),
@@ -164,16 +107,11 @@ class RecoveryController {
         });
       }
       
-      // Generate token using the correct username format for your system
       const keyMaterial = await deriveKeyFromRecoveryPhrase(recoveryWords);
       const keyPair = generateKeyPairFromSeed(keyMaterial);
       const mtPubBuffer = Buffer.from(keyPair.publicKey);
       
-      // Use the username from the found user record and only pass 2 parameters to createToken
-      // Fix: Remove the third argument (apIdentifier)
       const token = createToken(user.username, mtPubBuffer);
-      
-      console.log(`Token being sent: ${token.substring(0, 50)}...`);
       
       await AppDataSource.manager.update(
         User,
@@ -201,30 +139,94 @@ class RecoveryController {
     }
   }
 
+  // Initiate cross-AP recovery - client sends encrypted data
+  async initiateCrossAPRecovery(req, res) {
+    const tod_received = req.body.tod;
+    if (!checkTod(tod_received)) {
+      return res.status(408).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RECOVERY_RJT",
+        error: "Timeout error."
+      });
+    }
 
-  async checkRecoveryStatus(req, res){
-    
-    const { recoveryRequestId } = req.body;
+    const { tempUserId, encryptedRecoveryData, destinationApId } = req.body;
 
-    if (!recoveryRequestId) {
+    if (!tempUserId || !encryptedRecoveryData || !destinationApId) {
       return res.status(400).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
-        type: "MT_RECOVERY_STATUS",
-        status: "error",
-        error: "Missing recovery request ID."
+        type: "MT_CROSS_AP_RECOVERY_RJT",
+        error: "Missing required fields."
       });
     }
 
-    try{
-      // Fix: Add await here to properly resolve the Promise
-      const request = await AppDataSource.manager.findOneBy(RecoveryRequest, {
-        id : recoveryRequestId
+    try {
+      // Decrypt the recovery data with AP's private key
+      const decryptedData = privateDecrypt(getPrivateKey(), encryptedRecoveryData);
+      const recoveryRequestData = JSON.parse(decryptedData);
+
+      // Create cross-AP recovery request for propagation
+      const crossAPRequest = {
+        tempUserId,
+        requestingApId: apId,
+        destinationApId,
+        hash: recoveryRequestData.hash,
+        realUserId: recoveryRequestData.realUserId,
+        sourceApId: recoveryRequestData.sourceApId,
+        ephemeralPublicKey: recoveryRequestData.ephemeralPublicKey,
+        timestamp: recoveryRequestData.timestamp,
+        status: "PENDING",
+        expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000) // 48 hours
+      };
+
+      // Save to database for propagation
+      await AppDataSource.manager.save(CrossAPRecoveryRequest, crossAPRequest);
+
+      return res.status(200).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RECOVERY_ACK",
+        message: "Cross-AP recovery request initiated."
       });
 
+    } catch (error) {
+      console.error("Cross-AP recovery initiation error:", error);
+      return res.status(500).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RECOVERY_RJT",
+        error: "Failed to process recovery request."
+      });
+    }
+  }
+
+  // Check cross-AP recovery status
+  async checkCrossAPRecoveryStatus(req, res) {
+    const { tempUserId } = req.body;
+
+    if (!tempUserId) {
+      return res.status(400).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_RECOVERY_STATUS_RJT",
+        error: "Missing temp user ID."
+      });
+    }
+
+    try {
       await cleanupExpiredRequests();
       
+      const request = await AppDataSource.manager.findOneBy(CrossAPRecoveryRequest, {
+        tempUserId: tempUserId
+      });
+
       if (!request) {
         return res.status(404).json({
           id: apId,
@@ -232,236 +234,137 @@ class RecoveryController {
           priority: -1,
           type: "MT_RECOVERY_STATUS",
           status: "not_found",
-          error: "Recovery request not found."
-        });
-      }
-      
-      if (request.status === "EXPIRED"){
-        return res.status(410).json({
-          id: apId,
-          tod: Date.now(),
-          priority: -1,
-          type: "MT_RECOVERY_STATUS",
-          status: "expired",
-          message: "Recovery request has expired. Please initiate a new recovery."
+          hasResponse: false
         });
       }
 
-      if (request.status === "COMPLETED") {
+      // Check if response is available
+      const response = await AppDataSource.manager.findOneBy(CrossAPRecoveryResponse, {
+        tempUserId: tempUserId
+      });
+
+      if (response) {
         return res.status(200).json({
           id: apId,
           tod: Date.now(),
           priority: -1,
           type: "MT_RECOVERY_STATUS",
           status: "completed",
-          message: "Recovery data is available. Complete recovery with your recovery words."
+          hasResponse: true
         });
       }
-      
+
+      if (request.status === "EXPIRED") {
+        return res.status(410).json({
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_RECOVERY_STATUS",
+          status: "expired",
+          hasResponse: false
+        });
+      }
+
       return res.status(202).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
         type: "MT_RECOVERY_STATUS",
         status: "pending",
-        message: "Recovery request is still pending. Please try again later."
+        hasResponse: false
       });
-    }
-    catch(error){
+
+    } catch (error) {
       console.error("Error checking recovery status:", error);
       return res.status(500).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
-        type: "MT_RECOVERY_STATUS",
-        status: "error",
+        type: "MT_RECOVERY_STATUS_RJT",
         error: "Error checking recovery status."
       });
     }
   }
-  
-  async completeRecoveryProcess(req, res){
-    const { recoveryRequestId, recoveryWords } = req.body;
-    if (!recoveryRequestId || !recoveryWords) {
+
+  // Get recovery response for completion
+  async getRecoveryResponse(req, res) {
+    const { tempUserId } = req.body;
+
+    if (!tempUserId) {
       return res.status(400).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
-        type: "MT_RECOVERY_COMPLETE_RJT",
-        error: "Missing required fields."
+        type: "MT_GET_RECOVERY_RESPONSE_RJT",
+        error: "Missing temp user ID."
       });
     }
 
-    try{
-      const request = await AppDataSource.manager.findOneBy(RecoveryRequest, {
-        id: recoveryRequestId
+    try {
+      const response = await AppDataSource.manager.findOneBy(CrossAPRecoveryResponse, {
+        tempUserId: tempUserId
       });
-      
-      if (!request) {
+
+      if (!response) {
         return res.status(404).json({
           id: apId,
           tod: Date.now(),
           priority: -1,
-          type: "MT_RECOVERY_COMPLETE_RJT",
-          error: "Recovery request not found."
+          type: "MT_GET_RECOVERY_RESPONSE_RJT",
+          error: "Recovery response not found."
         });
       }
-
-      if (request.status !== "COMPLETED") {
-        return res.status(400).json({
-          id: apId,
-          tod: Date.now(),
-          priority: -1,
-          type: "MT_RECOVERY_COMPLETE_RJT",
-          error: `Recovery is not ready for completion. Current status: ${request.status}.`
-        });
-      }
-
-      const { token, username } = await completeRecovery(recoveryRequestId, recoveryWords);
 
       return res.status(200).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
-        type: "MT_RECOVERY_COMPLETE_ACK",
-        token,
-        username,
-        adminPubKey: getAdminPublicKey().toString()
+        type: "MT_GET_RECOVERY_RESPONSE_ACK",
+        encryptedResponse: response.encryptedTokenData
       });
-    }
 
-    catch(error){
-      console.error("Error completing recovery:", error);
+    } catch (error) {
+      console.error("Error getting recovery response:", error);
       return res.status(500).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
-        type: "MT_RECOVERY_COMPLETE_RJT",
-        error: error.message || "Error completing recovery."
+        type: "MT_GET_RECOVERY_RESPONSE_RJT",
+        error: "Error retrieving recovery response."
       });
     }
   }
 
-  async processRecoverySync(req, res){
+  // Process incoming cross-AP recovery requests and responses
+  async processCrossAPRecoverySync(req, res) {
+    try {
+      const { crossAPRequests, crossAPResponses } = req.body;
 
-    try{
-      const { recoveryRequests, recoveryResponses } = req.body;
-      if (recoveryRequests && Array.isArray(recoveryRequests) && recoveryRequests.length > 0) {
-        await processIncomingRecoveryRequests(recoveryRequests);
+      if (crossAPRequests && Array.isArray(crossAPRequests) && crossAPRequests.length > 0) {
+        await processIncomingCrossAPRequests(crossAPRequests);
       }
 
-      if (recoveryResponses && Array.isArray(recoveryResponses) && recoveryResponses.length > 0) {
-        await processIncomingRecoveryResponses(recoveryResponses);
+      if (crossAPResponses && Array.isArray(crossAPResponses) && crossAPResponses.length > 0) {
+        await processIncomingCrossAPResponses(crossAPResponses);
       }
+
       return res.status(200).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
-        type: "MT_RECOVERY_SYNC_ACK",
-        message: "Recovery data processed successfully."
+        type: "MT_CROSS_AP_RECOVERY_SYNC_ACK",
+        message: "Cross-AP recovery data processed successfully."
       });
-    }
-    catch(error){
-      console.error("Error processing recovery sync:", error);
+    } catch (error) {
+      console.error("Error processing cross-AP recovery sync:", error);
       return res.status(500).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
-        type: "MT_RECOVERY_SYNC_RJT",
-        error: "Error processing recovery sync data."
+        type: "MT_CROSS_AP_RECOVERY_SYNC_RJT",
+        error: "Error processing cross-AP recovery sync data."
       });
     }
-  }
-
-  // Add to RecoveryController.js
-
-async initiateBackgroundRecovery(req, res) {
-  const tod_received = req.body.tod;
-  if (!checkTod(tod_received)) {
-    return res.status(408).json({
-      id: apId,
-      tod: Date.now(),
-      priority: -1,
-      type: "MT_TEMP_RECOVERY_RJT",
-      error: "Timeout error."
-    });
-  }
-
-  const { username, apIdentifier, recoveryWords, tempUsername } = req.body;
-  
-  if (!username || !apIdentifier || !recoveryWords || !tempUsername) {
-    return res.status(400).json({
-      id: apId,
-      tod: Date.now(),
-      priority: -1,
-      type: "MT_TEMP_RECOVERY_RJT",
-      error: "Missing required fields."
-    });
-  }
-  
-  try {
-    // First check if the temporary username is already taken
-    const existingUser = await AppDataSource.manager.findOneBy(User, { 
-      username: tempUsername 
-    });
-    
-    if (existingUser) {
-      return res.status(409).json({
-        id: apId,
-        tod: Date.now(),
-        priority: -1,
-        type: "MT_TEMP_RECOVERY_RJT",
-        error: "Temporary username already exists. Please choose another one."
-      });
-    }
-    
-    // Generate recovery words for the temporary account
-    const tempRecoveryWords = generateRecoveryWords();
-    const tempRecoveryPhrase = tempRecoveryWords.join(" ");
-    const { hash, salt } = await hashRecoveryPhrase(tempRecoveryPhrase);
-    
-    // Generate keys for the temporary user
-    const keyPair = await generateEphemeralKeyPair();
-    const mtPubBuffer = Buffer.from(keyPair.publicKey);
-    
-    // Create a token for the temporary user
-    const tempToken = createToken(tempUsername, mtPubBuffer);
-    
-    // Save the temporary user
-    await AppDataSource.manager.save(User, { 
-      username: tempUsername,
-      recoveryKeyHash: hash,
-      recoveryKeySalt: salt,
-      recoveryKeyUpdatedAt: new Date()
-    });
-    
-    // Now initiate background recovery request
-    const { requestId } = await createRecoveryRequest(
-      username,
-      apIdentifier,
-      recoveryWords
-    );
-    
-    return res.status(200).json({
-      id: apId,
-      tod: Date.now(),
-      priority: -1,
-      type: "MT_TEMP_RECOVERY_ACK",
-      token: tempToken,
-      recoveryRequestId: requestId,
-      tempRecoveryWords: tempRecoveryWords,
-      adminPubKey: getAdminPublicKey().toString()
-    });
-  } catch (error) {
-    console.error("Error in background recovery:", error);
-    return res.status(500).json({
-      id: apId,
-      tod: Date.now(),
-      priority: -1,
-      type: "MT_TEMP_RECOVERY_RJT",
-      error: error.message || "Internal server error during temporary registration."
-    });
-  }
   }
 }
 

@@ -3,13 +3,13 @@ import { getApiURL } from "@/Library/getApiURL";
 import { MTResponseSigner } from "@/Library/interceptors";
 import axios from "axios";
 
-export async function compressImageForEmergencyNetwork(file) {
+export async function compressImageForEmergencyNetwork(file : any) {
   console.log(`Starting compression for ${Math.round(file.size/1024)} KB image`);
   
-  const createImageBitmap = async (file) => {
+  const createImageBitmap = async (file : any) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = (e : any) => {
         const img = new Image();
         img.onload = () => resolve(img);
         img.onerror = reject;
@@ -20,7 +20,7 @@ export async function compressImageForEmergencyNetwork(file) {
     });
   };
   
-  const compressWithParams = async (img, maxWidth, maxHeight, quality) => {
+  const compressWithParams = async (img : any, maxWidth : any , maxHeight : any,  quality : any) => {
     let width = img.width;
     let height = img.height;
     
@@ -34,21 +34,19 @@ export async function compressImageForEmergencyNetwork(file) {
       height = maxHeight;
     }
     
-    // Round dimensions to integers
     width = Math.round(width);
     height = Math.round(height);
-    
-    // Create canvas and draw resized image
+
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
-    
-    // Use high quality image rendering
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, 0, 0, width, height);
-    
-    // Convert to blob with specified quality
+
+    if(ctx){
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, width, height);
+    }
+  
     return new Promise(resolve => {
       canvas.toBlob(blob => resolve(blob), 'image/jpeg', quality);
     });
@@ -108,13 +106,16 @@ export async function compressImageForEmergencyNetwork(file) {
       canvas.height = 80;
       
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#eeeeee';
-      ctx.fillRect(0, 0, 100, 80);
-      
-      ctx.fillStyle = '#333333';
-      ctx.font = '10px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('Image Error', 50, 40);
+      if(ctx){
+        ctx.fillStyle = '#eeeeee';
+        ctx.fillRect(0, 0, 100, 80);
+        
+        ctx.fillStyle = '#333333';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Image Error', 50, 40);
+      }
+     
       
       const fallbackBlob = await new Promise(resolve => {
         canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.6);

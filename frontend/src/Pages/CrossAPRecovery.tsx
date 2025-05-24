@@ -1,4 +1,4 @@
-// src/Components/CrossAPRecovery.tsx
+// src/Pages/CrossAPRecovery.tsx
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/Components/ui/card";
 import { Button } from "@/Components/ui/button";
@@ -11,13 +11,15 @@ import {
   Loader2, 
   CheckCircle2, 
   XCircle, 
-  AlertTriangle, 
   Clock 
 } from "lucide-react";
 import { useMutation, useQuery } from "react-query";
 import { 
-  checkRecoveryStatus, 
-  completeRecovery 
+  recoverIdentity,
+  checkCrossAPRecoveryStatus, 
+  completeCrossAPRecovery,
+  getPendingCrossAPRecovery,
+  cancelCrossAPRecovery
 } from "@/Services/recovery"; 
 import { setCookie } from "typescript-cookie";
 import axios from "axios";
@@ -27,100 +29,108 @@ function CrossAPRecovery() {
   const { toast } = useToast();
   const [combinedUsername, setCombinedUsername] = useState("");
   const [words, setWords] = useState(Array(8).fill(""));
-  const [recoveryRequestId, setRecoveryRequestId] = useState("");
-  const [recoveryState, setRecoveryState] = useState("initial"); // initial, submitted, checking, completed, error
+  const [recoveryState, setRecoveryState] = useState("initial"); 
   const [errorMessage, setErrorMessage] = useState("");
+  const [tempUserId, setTempUserId] = useState("");
   
-  // Handle word input change
-  const handleWordChange = (index, value) => {
+  // Check for pending recovery on mount
+  useEffect(() => {
+    const pendingRecovery = getPendingCrossAPRecovery();
+    if (pendingRecovery) {
+      setTempUserId(pendingRecovery.tempUserId);
+      setCombinedUsername(pendingRecovery.originalUser);
+      setRecoveryState("checking");
+    }
+  }, []);
+  
+  const handleWordChange = (index: number, value: string) => {
     const newWords = [...words];
     newWords[index] = value;
     setWords(newWords);
   };
   
   // Check recovery status periodically
-  const { data: statusData, refetch: refetchStatus } = useQuery(
-    ["recoveryStatus", recoveryRequestId],
-    () => checkRecoveryStatus(recoveryRequestId),
+  const { refetch: refetchStatus } = useQuery(
+    ["crossAPRecoveryStatus", tempUserId],
+    () => checkCrossAPRecoveryStatus(tempUserId),
     {
-      enabled: recoveryState === "checking" && !!recoveryRequestId,
-      refetchInterval: 10000, // Check every 10 seconds
+      enabled: recoveryState === "checking" && !!tempUserId,
+      refetchInterval: 10000,
       onSuccess: (data) => {
         console.log("Recovery status:", data);
         
-        if (data.status === "completed") {
+        if (data.hasResponse) {
           setRecoveryState("ready");
           toast({
-            title: "Kurtarma hazır!",
-            description: "Kimliğiniz bulundu. Kurtarma kelimelerinizle işlemi tamamlayın.",
+            title: "Recovery Ready!",
+            description: "Your identity response has arrived. Complete the recovery process.",
             variant: "default"
           });
         } else if (data.status === "expired") {
           setRecoveryState("error");
-          setErrorMessage("Kurtarma isteği süresi doldu. Lütfen tekrar deneyin.");
+          setErrorMessage("Recovery request expired. Please try again.");
           toast({
-            title: "İstek süresi doldu",
-            description: "Kurtarma isteği süresi doldu. Lütfen tekrar deneyin.",
+            title: "Request Expired",
+            description: "Recovery request has expired. Please try again.",
             variant: "destructive"
           });
         }
       },
       onError: (error) => {
         console.error("Error checking status:", error);
-        // Don't change state yet, continue checking
       }
     }
   );
   
   // Initiate recovery
   const { mutate: recover, isLoading: isRecovering } = useMutation(
-    (recoveryData) => initiateRecovery(recoveryData),
+    (recoveryData: any) => recoverIdentity(recoveryData),
     {
-      onSuccess: (data) => {
-        console.log("Recovery initiation response:", data);
+      onSuccess: (data: any) => {
+        console.log("Recovery response:", data);
         
-        if (data.status === "completed" && data.token) {
+        if (data.token && data.local) {
           // Local recovery succeeded immediately
-          handleSuccessfulRecovery(data.token, data.adminPubKey);
-        } else if (data.status === "pending" && data.recoveryRequestId) {
+          handleSuccessfulRecovery(data.token);
+        } else if (data.status === "cross_ap_initiated") {
           // Cross-AP recovery initiated
-          setRecoveryRequestId(data.recoveryRequestId);
+          setTempUserId(data.tempUserId);
           setRecoveryState("checking");
           toast({
-            title: "Kurtarma başlatıldı",
-            description: "Kurtarma isteği oluşturuldu ve diğer cihazlara yayılıyor. Durum kontrol ediliyor...",
+            title: "Cross-AP Recovery Initiated",
+            description: "Recovery request sent to network. Checking for response...",
           });
         } else {
           setRecoveryState("error");
-          setErrorMessage("Beklenmeyen yanıt. Lütfen tekrar deneyin.");
+          setErrorMessage("Unexpected response. Please try again.");
         }
       },
-      onError: (error) => {
+      onError: (error: any) => {
         console.error("Recovery error:", error);
         setRecoveryState("error");
-        setErrorMessage(error.response?.data?.error || "Kurtarma başlatılırken bir hata oluştu.");
+        setErrorMessage(error.message || "Recovery initiation failed.");
         toast({
-          title: "Kurtarma hatası",
-          description: error.response?.data?.error || "Kurtarma başlatılırken bir hata oluştu.",
+          title: "Recovery Error",
+          description: error.message || "Recovery initiation failed.",
           variant: "destructive"
         });
       }
     }
   );
   
-  // Complete recovery with recovery words
+  // Complete cross-AP recovery
   const { mutate: finishRecovery, isLoading: isFinishing } = useMutation(
-    (data) => completeRecovery(data.requestId, data.recoveryWords),
+    () => completeCrossAPRecovery(tempUserId),
     {
       onSuccess: (data) => {
         console.log("Recovery completion response:", data);
-        handleSuccessfulRecovery(data.token, data.adminPubKey);
+        handleSuccessfulRecovery(data.token);
       },
-      onError: (error) => {
+      onError: (error: any) => {
         console.error("Recovery completion error:", error);
         toast({
-          title: "Kurtarma tamamlanamadı",
-          description: error.response?.data?.error || "Kurtarma tamamlanırken bir hata oluştu.",
+          title: "Recovery Failed",
+          description: error.message || "Failed to complete recovery.",
           variant: "destructive"
         });
       }
@@ -128,10 +138,10 @@ function CrossAPRecovery() {
   );
   
   // Handle successful recovery
-  const handleSuccessfulRecovery = (token, adminPubKey) => {
+  const handleSuccessfulRecovery = (token: string) => {
     toast({
-      title: "Başarılı!",
-      description: "Kimliğiniz başarıyla kurtarıldı. Anasayfaya yönlendiriliyorsunuz."
+      title: "Success!",
+      description: "Identity recovered successfully. Redirecting to home."
     });
     
     if (token) {
@@ -144,11 +154,6 @@ function CrossAPRecovery() {
       
       localStorage.setItem("emergency_token", token);
       axios.defaults.headers.common['Authorization'] = token;
-      
-      if (adminPubKey) {
-        localStorage.setItem("adminPubKey", adminPubKey);
-      }
-      
       localStorage.setItem("recovery_completed", "true");
       
       setTimeout(() => {
@@ -158,58 +163,52 @@ function CrossAPRecovery() {
   };
   
   // Handle form submission
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Validate combined username
     if (!combinedUsername.trim()) {
       toast({
-        title: "Hata",
-        description: "Lütfen kullanıcı adınızı girin.",
+        title: "Error",
+        description: "Please enter your username.",
         variant: "destructive"
       });
       return;
     }
     
-    // Check for @ symbol
     if (!combinedUsername.includes('@')) {
       toast({
-        title: "Hata",
-        description: "Kullanıcı adı formatı yanlış. 'kullanıcı@AP' formatında olmalıdır.",
+        title: "Error",
+        description: "Username format is incorrect. Use 'user@AP' format.",
         variant: "destructive"
       });
       return;
     }
     
-    // Split the combined username
     const [username, apIdentifier] = combinedUsername.split('@');
     
     if (!username || !apIdentifier) {
       toast({
-        title: "Hata",
-        description: "Kullanıcı adı ve AP kimliği gereklidir.",
+        title: "Error",
+        description: "Username and AP identifier are required.",
         variant: "destructive"
       });
       return;
     }
     
-    // Check if all words are filled for initial recovery
-    if (recoveryState !== "ready" && words.some(word => !word.trim())) {
-      toast({
-        title: "Hata",
-        description: "Lütfen tüm kurtarma kelimelerini girin.",
-        variant: "destructive"
-      });
-      return;
-    }
-    
-    if (recoveryState === "ready" && recoveryRequestId) {
-      // Complete cross-AP recovery
-      finishRecovery({
-        requestId: recoveryRequestId,
-        recoveryWords: words.join(" ")
-      });
+    if (recoveryState === "ready") {
+      // Complete cross-AP recovery (no words needed - keys already generated)
+      finishRecovery();
     } else {
+      // Check words for initial recovery
+      if (words.some(word => !word.trim())) {
+        toast({
+          title: "Error",
+          description: "Please enter all recovery words.",
+          variant: "destructive"
+        });
+        return;
+      }
+      
       // Initiate recovery
       setRecoveryState("submitted");
       recover({
@@ -218,6 +217,15 @@ function CrossAPRecovery() {
         recoveryWords: words.join(" ")
       });
     }
+  };
+  
+  // Cancel recovery
+  const handleCancel = () => {
+    cancelCrossAPRecovery();
+    setRecoveryState("initial");
+    setTempUserId("");
+    setErrorMessage("");
+    navigate("/");
   };
   
   // Render different UI states
@@ -229,116 +237,91 @@ function CrossAPRecovery() {
         <div className="flex justify-center">
           <Clock size={48} className="text-blue-500 animate-pulse" />
         </div>
-        <h3 className="text-xl font-semibold">Kurtarma isteği işleniyor</h3>
+        <h3 className="text-xl font-semibold">Processing Recovery Request</h3>
         <p className="text-gray-500 dark:text-gray-400">
-          Kimliğiniz başka bir erişim noktasında (AP) kayıtlı. İsteğiniz ağ üzerinden yayılıyor ve kimliğinizi bulmak için çalışıyoruz.
+          Your identity is registered at a different AP. The request is propagating through the network.
         </p>
         <div className="flex items-center justify-center gap-2">
           <Loader2 className="animate-spin h-5 w-5" />
-          <span>Durum kontrol ediliyor...</span>
+          <span>Checking status...</span>
         </div>
         <div className="text-sm text-gray-500 dark:text-gray-400 mt-4">
-          Bu işlem kullanıcıların hareketliliğine bağlı olarak birkaç dakika ile birkaç saat arasında sürebilir.
+          This may take several minutes to hours depending on network mobility.
         </div>
-        <Button 
-          variant="outline" 
-          onClick={() => navigate("/")}
-          className="mt-4"
-        >
-          Ana sayfaya dön
-        </Button>
+        <div className="flex gap-2 mt-4">
+          <Button variant="outline" onClick={handleCancel}>
+            Cancel Recovery
+          </Button>
+          <Button variant="outline" onClick={() => refetchStatus()}>
+            Check Now
+          </Button>
+        </div>
       </div>
     );
-  }   else if (recoveryState === "error") {
+  } else if (recoveryState === "error") {
     content = (
       <div className="text-center py-6 space-y-4">
         <div className="flex justify-center">
           <XCircle size={48} className="text-red-500" />
         </div>
-        <h3 className="text-xl font-semibold">Kurtarma hatası</h3>
+        <h3 className="text-xl font-semibold">Recovery Error</h3>
         <p className="text-red-500 dark:text-red-400">
-          {errorMessage || "Kurtarma işlemi sırasında bir hata oluştu."}
+          {errorMessage || "An error occurred during recovery."}
         </p>
-        <Button 
-          onClick={() => setRecoveryState("initial")}
-          className="mt-2"
-        >
-          Tekrar dene
+        <Button onClick={() => setRecoveryState("initial")}>
+          Try Again
         </Button>
       </div>
     );
   } else if (recoveryState === "ready") {
     content = (
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="space-y-4">
         <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-md border border-green-200 dark:border-green-800">
           <div className="flex items-start gap-2 text-green-800 dark:text-green-400">
             <CheckCircle2 size={20} className="flex-shrink-0 mt-0.5" />
             <div>
-              <p className="font-medium">Kimliğiniz bulundu!</p>
+              <p className="font-medium">Recovery Response Received!</p>
               <p className="text-sm">
-                Lütfen kurtarma kelimelerinizi girerek kimliğinizi doğrulayın. Bu işlem, kimliğinizi kurtarmak için son adımdır.
+                Your identity has been located. Click below to complete the recovery process.
               </p>
             </div>
           </div>
         </div>
         
-        <div>
-          <label className="text-sm font-medium">
-            Kurtarma Kelimeleri
-          </label>
-          <div className="grid grid-cols-2 gap-2 mt-1">
-            {words.map((word, index) => (
-              <div key={index} className="flex items-center gap-1">
-                <span className="text-gray-500 text-xs w-4">{index+1}.</span>
-                <Input
-                  value={word}
-                  onChange={(e) => handleWordChange(index, e.target.value)}
-                  placeholder={`${index+1}. kelime`}
-                  className="text-sm"
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-        
         <Button 
-          type="submit" 
+          onClick={handleSubmit}
           className="w-full"
           disabled={isFinishing}
         >
           {isFinishing ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              İşleniyor...
+              Completing Recovery...
             </>
-          ) : "Kimliği Kurtar"}
+          ) : "Complete Recovery"}
         </Button>
-      </form>
+      </div>
     );
   } else {
     // Initial state or submitted state
     content = (
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div>
-          <label className="text-sm font-medium">
-            Kullanıcı Adı
-          </label>
+          <label className="text-sm font-medium">Username</label>
           <Input
             value={combinedUsername}
             onChange={(e) => setCombinedUsername(e.target.value)}
-            placeholder="Örn: tuna@AP1"
+            placeholder="e.g: tuna@AP1"
             className="mt-1"
             disabled={isRecovering}
           />
           <p className="text-xs text-gray-500 mt-1">
-            Kullanıcı adınızı ve kayıt olduğunuz AP kimliğini 'kullanıcı@AP' formatında girin.
+            Enter your username and AP identifier in 'user@AP' format.
           </p>
         </div>
         
         <div>
-          <label className="text-sm font-medium">
-            Kurtarma Kelimeleri
-          </label>
+          <label className="text-sm font-medium">Recovery Words</label>
           <div className="grid grid-cols-2 gap-2 mt-1">
             {words.map((word, index) => (
               <div key={index} className="flex items-center gap-1">
@@ -346,7 +329,7 @@ function CrossAPRecovery() {
                 <Input
                   value={word}
                   onChange={(e) => handleWordChange(index, e.target.value)}
-                  placeholder={`${index+1}. kelime`}
+                  placeholder={`${index+1}. word`}
                   className="text-sm"
                   disabled={isRecovering}
                 />
@@ -363,13 +346,14 @@ function CrossAPRecovery() {
           {isRecovering ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              İşleniyor...
+              Processing...
             </>
-          ) : "Kimliği Kurtar"}
+          ) : "Recover Identity"}
         </Button>
       </form>
     );
   }
+
   return (
     <div className="flex flex-col justify-center items-center h-full p-4">
       <Card className="w-full max-w-md">
@@ -387,10 +371,10 @@ function CrossAPRecovery() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <KeyRound size={20} />
-                Uzak AP Kimlik Kurtarma
+                Cross-AP Identity Recovery
               </CardTitle>
               <CardDescription>
-                Farklı erişim noktalarında kayıtlı hesapları kurtarın
+                Recover accounts registered at different access points
               </CardDescription>
             </div>
           </div>
@@ -402,5 +386,5 @@ function CrossAPRecovery() {
     </div>
   );
 }
-  
-  export default CrossAPRecovery;
+
+export default CrossAPRecovery;

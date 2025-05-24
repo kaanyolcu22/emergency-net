@@ -11,6 +11,11 @@ import { useMutation } from "react-query";
 import axios from "axios";
 import { setCookie } from "typescript-cookie";
 import { getApiURL } from "@/Library/getApiURL";
+import { 
+  createClientSideRecoveryRequest,
+  generateTempUserId,
+  storeEphemeralKeys
+} from "@/Library/recoveryUtil";
 
 interface RecoveryData {
   username: string;
@@ -34,16 +39,65 @@ function TempRecoveryFlow() {
   };
   
   const { mutate: initiateBackgroundRecovery } = useMutation<any, Error, RecoveryData>(
-    (data) => {
+    async (data) => {
+      console.log("=== RECOVERY FLOW DEBUG START ===");
+      console.log("Recovery data:", data);
+      
+      // Get AP's public key first
+      console.log("Fetching AP info...");
+      const apInfoResponse = await axios.get(getApiURL() + "/hello");
+      console.log("AP info response:", apInfoResponse.data);
+      
+      const apCert = apInfoResponse.data.content?.cert || apInfoResponse.data.cert;
+      console.log("AP certificate:", apCert);
+      
+      if (!apCert) {
+        throw new Error("Could not get AP certificate from response");
+      }
+      
+      // Extract AP public key from certificate
+      const apPublicKey = extractPublicKeyFromCert(apCert);
+      console.log("Extracted public key length:", apPublicKey.length);
+      
+      if (!apPublicKey) {
+        throw new Error("Could not extract public key from certificate");
+      }
+      
+      // Generate temp user ID
+      const tempUserId = generateTempUserId(data.username, data.apIdentifier);
+      console.log("Generated temp user ID:", tempUserId);
+      
+      // Create client-side encrypted recovery request
+      console.log("Creating client-side recovery request...");
+      const { encryptedData, ephemeralKeyPair } = await createClientSideRecoveryRequest(
+        data.username,
+        data.apIdentifier,
+        data.recoveryWords,
+        tempUserId,
+        apPublicKey
+      );
+      
+      console.log("Encrypted data length:", encryptedData.length);
+      console.log("Ephemeral public key:", ephemeralKeyPair.publicKeyPem.substring(0, 100) + "...");
+      
+      // Store ephemeral keys for later use
+      storeEphemeralKeys(tempUserId, ephemeralKeyPair);
+      console.log("Stored ephemeral keys");
+      
+      // Send the properly formatted request
+      const requestPayload = {
+        tempUserId,
+        encryptedRecoveryData: encryptedData,
+        destinationApId: data.apIdentifier,
+        tod: Date.now()
+      };
+      
+      console.log("Sending request payload:", requestPayload);
+      console.log("=== RECOVERY FLOW DEBUG END ===");
+      
       return axios.post(
-        getApiURL() + "/initiate-background-recovery",
-        {
-          username: data.username,
-          apIdentifier: data.apIdentifier,
-          recoveryWords: data.recoveryWords,
-          tempUsername: data.tempUsername,
-          tod: Date.now()
-        }
+        getApiURL() + "/initiate-cross-ap-recovery",
+        requestPayload
       );
     },
     {
@@ -52,57 +106,69 @@ function TempRecoveryFlow() {
       },
       onSuccess: (response) => {
         try {
-          // Make sure we have the expected data structure
+          console.log("=== SUCCESS RESPONSE ===");
+          console.log("Response:", response.data);
+          
           const data = response.data;
           
-          if (!data.token || !data.recoveryRequestId) {
-            throw new Error("Invalid response format from server");
-          }
-          
           toast({
-            title: "Başarılı!",
-            description: "Geçici kimlikle kayıt oldunuz. Eski kimliğiniz arka planda kurtarılmaya çalışılacak."
+            title: "Success!",
+            description: "Cross-AP recovery initiated. You can now use the system while waiting for your original identity."
           });
           
-          // Store token and recovery data
-          setCookie("token", data.token, {
+          // Store recovery info for status checking
+          const tempUserId = generateTempUserId(
+            combinedUsername.split('@')[0], 
+            combinedUsername.split('@')[1]
+          );
+          
+          localStorage.setItem("cross_ap_recovery_temp_user", tempUserId);
+          localStorage.setItem("cross_ap_recovery_original_user", combinedUsername);
+          
+          // For now, create a temporary token (this should come from server in full implementation)
+          const tempToken = createTempToken(tempUsername);
+          console.log("Created temp token:", tempToken);
+          
+          setCookie("token", tempToken, {
             sameSite: "Lax",
             secure: location.protocol === 'https:',
             expires: 365,
             path: '/'
           });
           
-          localStorage.setItem("emergency_token", data.token);
-          localStorage.setItem("recovery_pending", "true");
-          localStorage.setItem("recovery_request_id", data.recoveryRequestId);
-          localStorage.setItem("original_username", combinedUsername);
+          localStorage.setItem("emergency_token", tempToken);
+          axios.defaults.headers.common['Authorization'] = tempToken;
           
-          if (data.tempRecoveryWords) {
-            localStorage.setItem("temp_recovery_words", JSON.stringify(data.tempRecoveryWords));
-          }
-          
-          // Set authorization header for future requests
-          axios.defaults.headers.common['Authorization'] = data.token;
-          
-          // Navigate to home
           setTimeout(() => {
             navigate("/home");
           }, 1500);
         } catch (error) {
           console.error("Error processing response:", error);
           toast({
-            title: "Hata",
-            description: "Sunucu yanıtı işlenirken bir hata oluştu",
+            title: "Error",
+            description: "Error processing server response",
             variant: "destructive"
           });
           setIsSubmitting(false);
         }
       },
       onError: (error) => {
+        console.error("=== RECOVERY ERROR ===");
         console.error("Background recovery error:", error);
+        
+        // More detailed error logging
+        if (axios.isAxiosError(error)) {
+          console.error("Axios error details:", {
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            data: error.response?.data,
+            headers: error.response?.headers
+          });
+        }
+        
         toast({
-          title: "Hata",
-          description: error.message || "Geçici kayıt sırasında bir hata oluştu",
+          title: "Error",
+          description: error.message || "Failed to initiate cross-AP recovery",
           variant: "destructive"
         });
         setIsSubmitting(false);
@@ -118,8 +184,8 @@ function TempRecoveryFlow() {
     
     if (!combinedUsername.trim()) {
       toast({
-        title: "Hata",
-        description: "Lütfen asıl kullanıcı adınızı girin.",
+        title: "Error",
+        description: "Please enter your original username.",
         variant: "destructive"
       });
       return;
@@ -127,8 +193,8 @@ function TempRecoveryFlow() {
     
     if (!tempUsername.trim()) {
       toast({
-        title: "Hata",
-        description: "Lütfen geçici kullanıcı adı girin.",
+        title: "Error",
+        description: "Please enter a temporary username.",
         variant: "destructive"
       });
       return;
@@ -136,8 +202,8 @@ function TempRecoveryFlow() {
     
     if (!combinedUsername.includes('@')) {
       toast({
-        title: "Hata",
-        description: "Kullanıcı adı formatı yanlış. 'kullanıcı@AP' formatında olmalıdır.",
+        title: "Error",
+        description: "Username format is incorrect. Use 'user@AP' format.",
         variant: "destructive"
       });
       return;
@@ -145,8 +211,8 @@ function TempRecoveryFlow() {
     
     if (words.some(word => !word.trim())) {
       toast({
-        title: "Hata",
-        description: "Lütfen tüm kurtarma kelimelerini girin.",
+        title: "Error",
+        description: "Please enter all recovery words.",
         variant: "destructive"
       });
       return;
@@ -161,6 +227,56 @@ function TempRecoveryFlow() {
       tempUsername
     });
   };
+  
+  // Helper function to extract public key from certificate
+  function extractPublicKeyFromCert(cert: string): string {
+    console.log("=== CERTIFICATE PARSING DEBUG ===");
+    console.log("Raw certificate:", cert);
+    
+    try {
+      const parts = cert.split('.');
+      console.log("Certificate parts count:", parts.length);
+      
+      if (parts.length >= 1) {
+        console.log("First part (base64):", parts[0].substring(0, 50) + "...");
+        
+        try {
+          const decoded = atob(parts[0]);
+          console.log("Decoded JSON:", decoded);
+          
+          const certData = JSON.parse(decoded);
+          console.log("Parsed certificate data:", certData);
+          
+          const publicKey = certData.apPub || certData.apPublicKey || certData.publicKey;
+          console.log("Extracted public key:", publicKey ? publicKey.substring(0, 100) + "..." : "NOT FOUND");
+          
+          if (!publicKey) {
+            console.error("Available keys in certificate:", Object.keys(certData));
+          }
+          
+          return publicKey || "";
+        } catch (parseError) {
+          console.error("JSON parse error:", parseError);
+          return "";
+        }
+      }
+    } catch (error) {
+      console.error("Certificate parsing error:", error);
+    }
+    
+    console.log("=== CERTIFICATE PARSING DEBUG END ===");
+    return "";
+  }
+  
+  // Helper function to create temporary token (simplified)
+  function createTempToken(username: string): string {
+    const tokenData = {
+      mtUsername: username,
+      apReg: "temp",
+      todReg: Date.now()
+    };
+    return btoa(JSON.stringify(tokenData)) + ".temp_signature.temp_cert";
+  }
   
   return (
     <div className="flex flex-col justify-center items-center h-full p-4">
@@ -178,10 +294,10 @@ function TempRecoveryFlow() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <UserPlus size={20} />
-                Geçici Kimlik Oluştur
+                Temporary Identity
               </CardTitle>
               <CardDescription>
-                Kimlik kurtarma işlemi tamamlanana kadar kullanabileceğiniz geçici bir kimlik oluşturun
+                Create a temporary account while your original identity is being recovered
               </CardDescription>
             </div>
           </div>
@@ -190,37 +306,37 @@ function TempRecoveryFlow() {
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
               <label className="text-sm font-medium">
-                Kurtarılacak Asıl Kullanıcı Adı
+                Original Username to Recover
               </label>
               <Input
                 value={combinedUsername}
                 onChange={(e) => setCombinedUsername(e.target.value)}
-                placeholder="Örn: tuna@AP1"
+                placeholder="e.g: tuna@AP1"
                 className="mt-1"
               />
               <p className="text-xs text-gray-500 mt-1">
-                Asıl kullanıcı adınızı ve AP kimliğini 'kullanıcı@AP' formatında girin.
+                Enter your original username and AP identifier in 'user@AP' format.
               </p>
             </div>
             
             <div>
               <label className="text-sm font-medium">
-                Kullanılacak Geçici Kullanıcı Adı
+                Temporary Username
               </label>
               <Input
                 value={tempUsername}
                 onChange={(e) => setTempUsername(e.target.value)}
-                placeholder="Örn: gecici_tuna"
+                placeholder="e.g: temp_tuna"
                 className="mt-1"
               />
               <p className="text-xs text-gray-500 mt-1">
-                Kimlik kurtarma işlemi tamamlanana kadar bu geçici kullanıcı adını kullanacaksınız.
+                You'll use this temporary username until recovery completes.
               </p>
             </div>
             
             <div>
               <label className="text-sm font-medium">
-                Asıl Hesabın Kurtarma Kelimeleri
+                Original Account Recovery Words
               </label>
               <div className="grid grid-cols-2 gap-2 mt-1">
                 {words.map((word, index) => (
@@ -229,7 +345,7 @@ function TempRecoveryFlow() {
                     <Input
                       value={word}
                       onChange={(e) => handleWordChange(index, e.target.value)}
-                      placeholder={`${index+1}. kelime`}
+                      placeholder={`${index+1}. word`}
                       className="text-sm"
                     />
                   </div>
@@ -245,9 +361,9 @@ function TempRecoveryFlow() {
               {isSubmitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  İşleniyor...
+                  Processing...
                 </>
-              ) : "Geçici Hesap Oluştur ve Kurtarmayı Başlat"}
+              ) : "Create Temporary Account & Start Recovery"}
             </Button>
           </form>
         </CardContent>

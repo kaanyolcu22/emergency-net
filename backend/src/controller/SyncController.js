@@ -11,15 +11,17 @@ import {
   verifyChannel,
 } from "../util/SyncUtil.js";
 import { 
-  processIncomingRecoveryRequests, 
-  processIncomingRecoveryResponses,
-  cleanupExpiredRequests
+  processIncomingCrossAPRequests, 
+  processIncomingCrossAPResponses,
+  cleanupExpiredRequests,
+  getPendingCrossAPRequests,
+  getCrossAPResponses
 } from "../util/CrossApRecoveryUtil.js";
 import { checkTod } from "../util/Util.js";
 import { getBlacklistAsArray } from "../util/DatabaseUtil.js";
 import { addMissingBlacklistedPUs } from "../util/BlacklistUtil.js";
-import { RecoveryRequest } from "../database/entity/RecoveryRequest.js";
-import { RecoveryResponse } from "../database/entity/RecoveryResponse.js";
+import { CrossAPRecoveryRequest } from "../database/entity/CrossAPRecoveryRequest.js";
+import { CrossAPRecoveryResponse } from "../database/entity/CrossAPRecoveryResponse.js";
 import { User } from "../database/entity/User.js"; 
 
 class SyncController {
@@ -31,18 +33,10 @@ class SyncController {
         where: { isActive: true }
       });
       
-      const activeRecoveryRequests = await AppDataSource.getRepository(RecoveryRequest).find({
-        where: { 
-          requestingApId: apId,
-          status: "PENDING" 
-        }
-      });
+      const pendingCrossAPRequests = await getPendingCrossAPRequests();
+      const crossAPResponses = await getCrossAPResponses();
 
-      const recoveryResponses = await AppDataSource.getRepository(RecoveryResponse).find({
-        where: { targetApId: apId }
-      });
-
-      console.log(`Returning ${channels.length} channels, ${activeRecoveryRequests.length} recovery requests, and ${recoveryResponses.length} recovery responses in emergency sync`);
+      console.log(`Returning ${channels.length} channels, ${pendingCrossAPRequests.length} cross-AP requests, and ${crossAPResponses.length} cross-AP responses in emergency sync`);
       
       return res.status(200).json({
         tod: Date.now(),
@@ -52,8 +46,8 @@ class SyncController {
           channels: channels,
           missingMessages: {},
           blacklist: [],
-          recoveryRequests: activeRecoveryRequests,
-          recoveryResponses: recoveryResponses
+          crossAPRequests: pendingCrossAPRequests,
+          crossAPResponses: crossAPResponses
         }
       });
     } catch (error) {
@@ -67,14 +61,12 @@ class SyncController {
     }
   }
 
-
-
   async sync(req, res, next) {
     try {
       const receivedMessages = req.body.messages;
       const receivedChannels = req.body.channels;
-      const receivedRecoveryRequests = req.body.recoveryRequests || [];
-      const receivedRecoveryResponses = req.body.recoveryResponses || [];
+      const receivedCrossAPRequests = req.body.crossAPRequests || [];
+      const receivedCrossAPResponses = req.body.crossAPResponses || [];
       const tod_received = req.body.tod;
 
       if (!checkTod(tod_received)) {
@@ -97,18 +89,15 @@ class SyncController {
         });
       }
 
-
-
       await cleanupExpiredRequests();
-      console.log(`Processing ${receivedRecoveryRequests.length} recovery requests and ${receivedRecoveryResponses.length} recovery responses`);
+      console.log(`Processing ${receivedCrossAPRequests.length} cross-AP requests and ${receivedCrossAPResponses.length} cross-AP responses`);
 
-
-      if(receivedRecoveryRequests.length > 0){
-        await processIncomingRecoveryRequests(receivedRecoveryRequests);
+      if (receivedCrossAPRequests.length > 0) {
+        await processIncomingCrossAPRequests(receivedCrossAPRequests);
       }
 
-      if(receivedRecoveryResponses.length > 0){
-        await processIncomingRecoveryResponses(receivedRecoveryResponses);
+      if (receivedCrossAPResponses.length > 0) {
+        await processIncomingCrossAPResponses(receivedCrossAPResponses);
       }
       
       const blacklistedPUs = await addMissingBlacklistedPUs(req.body.blacklist || []);
@@ -127,9 +116,9 @@ class SyncController {
 
       await Promise.all(
         missingMessages.map(async (message) => {
-          try{
+          try {
             const messageVerificationResult = verifyMessage(message);
-            if(messageVerificationResult?.isMessageVerified){
+            if (messageVerificationResult?.isMessageVerified) {
               await AppDataSource.manager.save(Message, {
                 content: message.content,
                 usernick: message.usernick,
@@ -144,20 +133,16 @@ class SyncController {
                 imageWidth: message.imageWidth || null,
                 imageHeight: message.imageHeight || null
               });
-
-            }
-            else{
+            } else {
               if (!unverifiedMessages[message.channel]) {
                 unverifiedMessages[message.channel] = [];
               }
               unverifiedMessages[message.channel].push(message.hashKey);
             }
-          }
-          catch(error){
+          } catch (error) {
             console.error("Error saving message:", error);
           }
         })
-
       );
 
       await Promise.all(
@@ -182,9 +167,8 @@ class SyncController {
       const messagesToSend = await getMessagesToSend(receivedMessages);
       const blacklist = await getBlacklistAsArray();
 
-
       const recoveryData = await AppDataSource.manager.find(User, {
-        select : [
+        select: [
           "username", 
           "recoveryKeyHash", 
           "recoveryKeySalt", 
@@ -194,32 +178,23 @@ class SyncController {
         ]
       });
       
-      const activeRecoveryRequests = await AppDataSource.getRepository(RecoveryRequest).find({
-        where: { 
-          requestingApId: apId,
-          status: "PENDING" 
-        }
-      });
+      const pendingCrossAPRequests = await getPendingCrossAPRequests();
+      const crossAPResponses = await getCrossAPResponses();
 
-
-      const recoveryResponses = await AppDataSource.getRepository(RecoveryResponse).find({
-        where: { targetApId: apId }
-      });
-
-      const recoveryStats = {
-        pendingRequestsCount: activeRecoveryRequests.length,
-        completedRequestsCount: await AppDataSource.getRepository(RecoveryRequest).count({
+      const crossAPStats = {
+        pendingRequestsCount: pendingCrossAPRequests.length,
+        completedRequestsCount: await AppDataSource.getRepository(CrossAPRecoveryRequest).count({
           where: { requestingApId: apId, status: "COMPLETED" }
         }),
-        expiredRequestsCount: await AppDataSource.getRepository(RecoveryRequest).count({
+        expiredRequestsCount: await AppDataSource.getRepository(CrossAPRecoveryRequest).count({
           where: { requestingApId: apId, status: "EXPIRED" }
-        })
+        }),
+        responsesCount: crossAPResponses.length
       };
-
 
       const apInfo = {
         id: apId,
-        knownAPs: await this.getKnownAPs(), // This would be a function that returns APs this AP has seen
+        knownAPs: await this.getKnownAPs(),
         lastSyncTime: Date.now()
       };
 
@@ -233,14 +208,13 @@ class SyncController {
           channels: channelsToSend,
           blacklist: blacklist,
           recoveryData: recoveryData,
-          recoveryRequests: activeRecoveryRequests,
-          recoveryResponses: recoveryResponses,
-          recoveryStats: recoveryStats,
+          crossAPRequests: pendingCrossAPRequests,
+          crossAPResponses: crossAPResponses,
+          crossAPStats: crossAPStats,
           apInfo: apInfo
         },
       });
-    }
-    catch(error){
+    } catch (error) {
       console.error("Sync error:", error);
       return res.status(500).json({
         tod: Date.now(),
@@ -249,15 +223,14 @@ class SyncController {
         error: "Internal server error during sync."
       });
     }
-}
+  }
 
-async getKnownAPs() {
-  return [
-    { apId: "AP1", lastSeen: Date.now() - 3600000 },
-    { apId: "AP2", lastSeen: Date.now() - 7200000 }
-  ];
-}
-
+  async getKnownAPs() {
+    return [
+      { apId: "AP1", lastSeen: Date.now() - 3600000 },
+      { apId: "AP2", lastSeen: Date.now() - 7200000 }
+    ];
+  }
 }
 
 export const syncController = new SyncController();

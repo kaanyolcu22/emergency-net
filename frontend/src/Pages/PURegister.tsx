@@ -69,11 +69,11 @@ function PURegister() {
           try {
             await hello(content.token);
             navigate("/home");
-          } catch (error) {
+          } catch (error : any) {
             console.error("Hello verification failed:", error);
             handleError(error);
           }
-        } catch (error) {
+        } catch (error : any) {
           console.error("Registration error:", error);
           handleError(error);
         }

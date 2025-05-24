@@ -5,6 +5,7 @@ import { syncController } from "../controller/SyncController.js";
 import { helloController } from "../controller/HelloController.js";
 import { channelController } from "../controller/ChannelController.js";
 import { certifyController } from "../controller/CertifyController.js";
+import { recoveryController } from "../controller/RecoveryController.js";
 
 const protectedRouter = express.Router();
 protectedRouter.use(authMiddleware);
@@ -16,5 +17,10 @@ protectedRouter.post("/channel", channelController.createChannel.bind(channelCon
 protectedRouter.delete("/channel", channelController.destroyChannel.bind(channelController));
 protectedRouter.post("/request-to-certify", certifyController.requestToCertify.bind(certifyController));
 protectedRouter.post("/certify", certifyController.certify.bind(certifyController));
+
+// Cross-AP Recovery Routes
+protectedRouter.post("/check-cross-ap-recovery-status", recoveryController.checkCrossAPRecoveryStatus.bind(recoveryController));
+protectedRouter.post("/get-recovery-response", recoveryController.getRecoveryResponse.bind(recoveryController));
+protectedRouter.post("/cross-ap-recovery-sync", recoveryController.processCrossAPRecoverySync.bind(recoveryController));
 
 export default protectedRouter;

@@ -1,4 +1,4 @@
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet} from "react-router-dom";
 import SyncButton from "./SyncButton";
 import useSyncStore from "@/Hooks/useSyncStore";
 import { useState, useCallback, useEffect } from "react";
@@ -6,7 +6,6 @@ import { useState, useCallback, useEffect } from "react";
 interface SyncWrapperProps {}
 
 const SyncWrapper: React.FC<SyncWrapperProps> = () => {
-  const navigate = useNavigate();
   const [tick, setTick] = useState<boolean>(false);
   
   const onSyncSuccess = useCallback(() => {

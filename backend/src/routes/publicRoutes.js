@@ -8,10 +8,12 @@ const publicRouter = express.Router();
 
 publicRouter.post("/register", registerController.register.bind(registerController));
 publicRouter.get("/get-password", passwordController.getPassword.bind(passwordController));
-publicRouter.post("/recover-identity", (req, res) => recoveryController.recoverIdentity(req, res));
-publicRouter.post("/initiate-background-recovery", recoveryController.initiateBackgroundRecovery.bind(recoveryController));
-// Fix: Use the emergencySync method from syncController
-publicRouter.get("/emergency-sync", (req, res) => syncController.emergencySync(req, res));
 
+// Recovery Routes
+publicRouter.post("/recover-identity", (req, res) => recoveryController.recoverIdentity(req, res));
+publicRouter.post("/initiate-cross-ap-recovery", (req, res) => recoveryController.initiateCrossAPRecovery(req, res));
+
+// Emergency sync (no auth required)
+publicRouter.get("/emergency-sync", (req, res) => syncController.emergencySync(req, res));
 
 export default publicRouter;
