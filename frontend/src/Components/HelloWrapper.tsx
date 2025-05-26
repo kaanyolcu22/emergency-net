@@ -10,6 +10,8 @@ import { getTokenData } from "@/Library/token";
 import { hello } from "@/Services/hello";
 import { Button } from "./ui/button";
 import { logout } from "@/Library/util";
+import { autoFixAuthenticationIssues } from '../Library/client-key-sync-fix.js';
+
 
 // Define the TokenData interface
 interface TokenData {
@@ -36,6 +38,14 @@ function HelloWrapper() {
   useEffect(() => {
     const initializeApp = async () => {
       try {
+        const fixResult = await autoFixAuthenticationIssues();
+        if (fixResult.action === "redirect_register") {
+          navigate("/register");
+          return;
+        } else if (fixResult.action === "offer_recovery") {
+          navigate("/recovery");
+          return;
+        }
         const recoveryCompleted = localStorage.getItem("recovery_completed") === "true";
         if (recoveryCompleted) {
           console.log("Recovery completed flag found, clearing it");

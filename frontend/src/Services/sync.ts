@@ -80,19 +80,19 @@ export async function sync({ localStore }: { localStore: any }) {
   
   try {
     console.log("Preparing to sign data for sync...");
-    const crossAPRequests = JSON.parse(localStorage.getItem("pendingCrossAPRequests") || "[]");
-    const crossAPResponses = JSON.parse(localStorage.getItem("pendingCrossAPResponses") || "[]");
-    
+  
     const syncPayload = {
       messages: localStore.messages || {},
       channels: localStore.channels || [],
       blacklist: localStore.blacklist || [],
-      crossAPRequests: crossAPRequests || [],
-      crossAPResponses: crossAPResponses || [],
       tod: Date.now() 
     };
     
-    console.log(`Including ${crossAPRequests.length} cross-AP requests and ${crossAPResponses.length} cross-AP responses in sync`);
+    console.log("Sync payload structure:", {
+      messageChannels: Object.keys(syncPayload.messages),
+      channelsCount: syncPayload.channels.length,
+      blacklistCount: syncPayload.blacklist.length
+    });
     
     const signedData = await MTResponseSigner(syncPayload);
     console.log("Data signed successfully");

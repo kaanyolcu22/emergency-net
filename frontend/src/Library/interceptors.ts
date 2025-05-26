@@ -1,6 +1,8 @@
 import { APDataReference } from "./APData";
 import { sign, verify } from "./crypt";
 import { readPrivateKey } from "./keys";
+import { readPublicKey } from "./keys";
+import { keyToJwk } from "./crypt";
 
 export async function APResponseVerifier({
   content,
@@ -30,18 +32,34 @@ export async function APResponseVerifier({
 
 export async function MTResponseSigner(content: Record<string, any>) {
   content.tod = Date.now();
-  const MTKey = await readPrivateKey();
-  const signature = await sign(MTKey, JSON.stringify(content));
-
-  const result: any = { content, signature };
-  console.log("Sending signed data:", {
-    content: JSON.stringify(content),
-    signature: signature.substring(0, 50) + "..." // Just show beginning
-  });
-  const cert = await localStorage.getItem("pu_cert");
-  if (cert) {
-    result.pu_cert = cert;
+  
+  console.log("=== MTResponseSigner Debug ===");
+  console.log("Content to sign:", JSON.stringify(content));
+  
+  try {
+    const MTKey = await readPrivateKey();
+    console.log("Private key loaded successfully");
+    
+    // Get the public key to compare
+    const MTPublicKey = await readPublicKey();
+    const publicKeyJwk = await keyToJwk(MTPublicKey);
+    console.log("Client public key (JWK):", JSON.stringify(publicKeyJwk, null, 2));
+    
+    const signature = await sign(MTKey, JSON.stringify(content));
+    console.log("Generated signature:", signature.substring(0, 50) + "...");
+    
+    const result: any = { content, signature };
+    
+    const cert = localStorage.getItem("pu_cert");
+    if (cert) {
+      result.pu_cert = cert;
+    }
+    
+    console.log("=== End MTResponseSigner Debug ===");
+    return result;
+    
+  } catch (error) {
+    console.error("Signing failed:", error);
+    throw error;
   }
-
-  return result;
 }
