@@ -46,15 +46,15 @@ function TempRecoveryFlow() {
       // Get AP's public key first
       console.log("Fetching AP info...");
       const apInfoResponse = await axios.get(getApiURL() + "/hello");
-      console.log("AP info response:", apInfoResponse.data);
-      
-      const apCert = apInfoResponse.data.content?.cert || apInfoResponse.data.cert;
-      console.log("AP certificate:", apCert);
-      
-      if (!apCert) {
-        throw new Error("Could not get AP certificate from response");
-      }
-      
+        let apCert;
+        if (apInfoResponse.data.content?.cert) {
+          apCert = apInfoResponse.data.content.cert;
+        } else if (apInfoResponse.data.cert) {
+          apCert = apInfoResponse.data.cert;
+        } else {
+          throw new Error("Could not find certificate in AP response");
+        }
+
       // Extract AP public key from certificate
       const apPublicKey = extractPublicKeyFromCert(apCert);
       console.log("Extracted public key length:", apPublicKey.length);
@@ -230,43 +230,36 @@ function TempRecoveryFlow() {
   
   // Helper function to extract public key from certificate
   function extractPublicKeyFromCert(cert: string): string {
-    console.log("=== CERTIFICATE PARSING DEBUG ===");
-    console.log("Raw certificate:", cert);
-    
     try {
       const parts = cert.split('.');
-      console.log("Certificate parts count:", parts.length);
-      
-      if (parts.length >= 1) {
-        console.log("First part (base64):", parts[0].substring(0, 50) + "...");
-        
-        try {
-          const decoded = atob(parts[0]);
-          console.log("Decoded JSON:", decoded);
-          
-          const certData = JSON.parse(decoded);
-          console.log("Parsed certificate data:", certData);
-          
-          const publicKey = certData.apPub || certData.apPublicKey || certData.publicKey;
-          console.log("Extracted public key:", publicKey ? publicKey.substring(0, 100) + "..." : "NOT FOUND");
-          
-          if (!publicKey) {
-            console.error("Available keys in certificate:", Object.keys(certData));
-          }
-          
-          return publicKey || "";
-        } catch (parseError) {
-          console.error("JSON parse error:", parseError);
-          return "";
-        }
+      if (parts.length < 1) {
+        throw new Error("Invalid certificate format");
       }
-    } catch (error) {
-      console.error("Certificate parsing error:", error);
+      
+      // Decode the first part which contains the AP data
+      const decoded = atob(parts[0]);
+      const certData = JSON.parse(decoded);
+      
+      // EmergencyNet stores the public key in 'apPub' field
+      const publicKey = certData.apPub;
+      
+      if (!publicKey) {
+        throw new Error(`Public key not found. Available fields: ${Object.keys(certData).join(', ')}`);
+      }
+      
+      // Validate it's proper PEM format
+      if (!publicKey.includes('-----BEGIN PUBLIC KEY-----')) {
+        throw new Error("Invalid PEM format in certificate");
+      }
+      
+      console.log("Successfully extracted public key from certificate");
+      return publicKey;
+      
+    } catch (error : any) {
+      console.error("Certificate parsing failed:", error);
+      throw new Error(`Failed to extract public key: ${error.message}`);
     }
-    
-    console.log("=== CERTIFICATE PARSING DEBUG END ===");
-    return "";
-  }
+}
   
   // Helper function to create temporary token (simplified)
   function createTempToken(username: string): string {

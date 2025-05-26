@@ -138,24 +138,28 @@ export async function hashRecoveryWords(recoveryWordsString: string): Promise<st
   return arrayBufferToBase64(derivedBits);
 }
 
-/**
- * Encrypts recovery request data with AP public key
- */
 export async function encryptRecoveryRequestForAP(
   data: RecoveryRequestData, 
   apPublicKeyPem: string
 ): Promise<string> {
   try {
-    // Convert PEM to crypto key
+    // Clean the PEM key - remove headers and whitespace
     const pemHeader = "-----BEGIN PUBLIC KEY-----";
     const pemFooter = "-----END PUBLIC KEY-----";
-    const pemContents = apPublicKeyPem.substring(
-      pemHeader.length,
-      apPublicKeyPem.length - pemFooter.length
-    ).replace(/\n/g, '');
     
+    if (!apPublicKeyPem.includes(pemHeader)) {
+      throw new Error("Invalid PEM format - missing header");
+    }
+    
+    const pemContents = apPublicKeyPem
+      .replace(pemHeader, '')
+      .replace(pemFooter, '')
+      .replace(/\s/g, ''); // Remove all whitespace including \n
+    
+    // Convert to ArrayBuffer
     const binaryDer = base64ToArrayBuffer(pemContents);
     
+    // Import the public key
     const publicKey = await window.crypto.subtle.importKey(
       'spki',
       binaryDer,
@@ -180,9 +184,9 @@ export async function encryptRecoveryRequestForAP(
     );
     
     return arrayBufferToBase64(encrypted);
-  } catch (error) {
-    console.error("Encryption error:", error);
-    throw new Error("Failed to encrypt recovery request data");
+  } catch (error : any) {
+    console.error("Encryption error details:", error);
+    throw new Error(`Failed to encrypt recovery request: ${error.message}`);
   }
 }
 
