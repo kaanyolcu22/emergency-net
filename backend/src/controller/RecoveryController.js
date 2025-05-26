@@ -1,3 +1,5 @@
+// Updated RecoveryController.js with hybrid decryption support
+
 import { apId } from "../../bin/www.js";
 import { User } from "../database/entity/User.js";
 import { AppDataSource } from "../database/newDbSetup.js";
@@ -10,16 +12,17 @@ import {
 } from "../util/RecoveryUtil.js";
 import { createToken } from "../util/RegisterUtils.js";
 import { checkTod } from "../util/Util.js";
-import { getAdminPublicKey, getPublicKey } from "../scripts/readkeys.js";
+import { getAdminPublicKey, getPublicKey, getPrivateKey } from "../scripts/readkeys.js";
 import { 
   processIncomingCrossAPRequests,
   processIncomingCrossAPResponses,
   cleanupExpiredRequests,
-  createCrossAPResponse
+  createCrossAPResponse,
+  decryptRecoveryRequestData
 } from "../util/CrossApRecoveryUtil.js";
 import { CrossAPRecoveryRequest } from "../database/entity/CrossApRecoveryRequest.js";
 import { CrossAPRecoveryResponse } from "../database/entity/CrossApRecoveryResponse.js";
-import { base64toJson, privateDecrypt } from "../util/CryptoUtil.js";
+import crypto from 'crypto';
 
 class RecoveryController {
 
@@ -165,9 +168,19 @@ class RecoveryController {
     }
 
     try {
-      // Decrypt the recovery data with AP's private key
-      const decryptedData = privateDecrypt(getPrivateKey(), encryptedRecoveryData);
-      const recoveryRequestData = JSON.parse(decryptedData);
+      console.log("🔄 Processing cross-AP recovery initiation...");
+      console.log("Temp User ID:", tempUserId);
+      console.log("Destination AP ID:", destinationApId);
+      console.log("Encrypted data length:", encryptedRecoveryData?.length);
+
+      // Decrypt the recovery data using hybrid decryption
+      console.log("🔓 Decrypting recovery request data...");
+      const recoveryRequestData = await decryptRecoveryRequestData(encryptedRecoveryData);
+      
+      console.log("✅ Recovery request data decrypted successfully");
+      console.log("Decrypted data keys:", Object.keys(recoveryRequestData));
+      console.log("Real User ID:", recoveryRequestData.realUserId);
+      console.log("Source AP ID:", recoveryRequestData.sourceApId);
 
       // Create cross-AP recovery request for propagation
       const crossAPRequest = {
@@ -184,24 +197,37 @@ class RecoveryController {
       };
 
       // Save to database for propagation
+      console.log("💾 Saving cross-AP recovery request to database...");
       await AppDataSource.manager.save(CrossAPRecoveryRequest, crossAPRequest);
+      console.log("✅ Cross-AP recovery request saved successfully");
 
       return res.status(200).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
         type: "MT_CROSS_AP_RECOVERY_ACK",
-        message: "Cross-AP recovery request initiated."
+        message: "Cross-AP recovery request initiated successfully."
       });
 
     } catch (error) {
-      console.error("Cross-AP recovery initiation error:", error);
+      console.error("❌ Cross-AP recovery initiation error:", error);
+      
+      // Provide more specific error messages
+      let errorMessage = "Failed to process recovery request.";
+      if (error.message.includes("Hybrid decryption failed")) {
+        errorMessage = "Failed to decrypt recovery data. Please check your recovery words.";
+      } else if (error.message.includes("JSON")) {
+        errorMessage = "Invalid recovery data format.";
+      } else if (error.message.includes("private key")) {
+        errorMessage = "Server configuration error - private key not available.";
+      }
+      
       return res.status(500).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
         type: "MT_CROSS_AP_RECOVERY_RJT",
-        error: "Failed to process recovery request."
+        error: errorMessage
       });
     }
   }
