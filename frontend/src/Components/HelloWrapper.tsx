@@ -13,13 +13,11 @@ import { logout } from "@/Library/util";
 import { autoFixAuthenticationIssues } from '../Library/client-key-sync-fix.js';
 
 
-// Define the TokenData interface
 interface TokenData {
   mtUsername?: string;
   apReg?: string;
   mtPubKey?: string;
   todReg?: number;
-  // Add other properties your token might have
 }
 
 const TokenDataContext = createContext<TokenData | null>(null);
@@ -60,7 +58,7 @@ function HelloWrapper() {
           if (token) { 
           setCookie("token", token, {
             sameSite: "Lax",
-              secure: location.pathname.startsWith('https:'), // Fix for protocol access
+              secure: location.pathname.startsWith('https:'), 
             expires: 365,
             path: '/'
           });
@@ -74,7 +72,7 @@ function HelloWrapper() {
           try {
             const data = getTokenData(token);
             console.log("Token data:", data);
-            setTokenData(data as TokenData); // Type assertion
+            setTokenData(data as TokenData); 
           } catch (error) {
             console.error("Error parsing token data:", error);
           }
@@ -111,14 +109,12 @@ function HelloWrapper() {
           }
         } catch (error: unknown) {
           console.error("Error in hello call:", error);
-          
-          // Proper error type handling
+
           const axiosError = error as { response?: { status: number } };
           
           if (axiosError.response && axiosError.response.status === 400) {
             console.log("Token invalid, clearing and trying without token");
-            
-            // Use imported setCookie and proper cookie removal
+          
             setCookie("token", "", { path: '/', expires: -1 });
             localStorage.removeItem("emergency_token");
             delete axios.defaults.headers.common['Authorization'];

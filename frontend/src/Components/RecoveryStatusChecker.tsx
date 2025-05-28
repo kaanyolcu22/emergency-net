@@ -64,8 +64,7 @@ function RecoveryStatusChecker() {
           title: "Success!",
           description: "Your identity has been recovered. You'll be switched to your original account."
         });
-        
-        // Set new token
+
         setCookie("token", response.token, {
           sameSite: "Lax",
           secure: location.protocol === 'https:',
@@ -75,13 +74,11 @@ function RecoveryStatusChecker() {
         
         localStorage.setItem("emergency_token", response.token);
         axios.defaults.headers.common['Authorization'] = response.token;
-        
-        // Clear recovery state
+
         localStorage.removeItem("recovery_pending");
         localStorage.removeItem("recovery_request_id");
         localStorage.removeItem("original_username");
         
-        // Refresh the page to apply new identity
         setTimeout(() => {
           window.location.reload();
         }, 1500);
