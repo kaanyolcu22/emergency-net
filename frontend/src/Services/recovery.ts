@@ -1,4 +1,5 @@
-// src/Services/recovery.ts - Simple fix by updating token with client keys
+// src/Services/recovery.ts - Fixed to handle local vs cross-AP recovery correctly
+
 import { getApiURL } from "@/Library/getApiURL";
 import axios, { AxiosError } from "axios";  
 import { keyToJwk, generateKeys } from "@/Library/crypt";
@@ -19,24 +20,108 @@ interface RecoveryResponse {
 }
 
 /**
- * Unified recovery function
+ * Hash recovery words client-side - simple hash without salt
+ */
+async function hashRecoveryWords(recoveryWords: string): Promise<string> {
+  const wordString = Array.isArray(recoveryWords) ? recoveryWords.join(" ") : recoveryWords;
+  const encoder = new TextEncoder();
+  const data = encoder.encode(wordString);
+  
+  // Simple SHA-256 hash without salt
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Unified recovery function - handles both local and cross-AP
  */
 export async function recoverIdentity(recoveryData: RecoveryData): Promise<RecoveryResponse> {
   try {
-    console.log(`Starting unified recovery for: ${recoveryData.username}@${recoveryData.apIdentifier}`);
+    console.log(`🔄 Starting recovery for: ${recoveryData.username}@${recoveryData.apIdentifier}`);
     
-    const localResult = await attemptLocalRecovery(recoveryData);
-    if (localResult) {
+    // Step 1: Generate fresh keys for the recovery
+    const { sign } = await generateKeys();
+    const privateKeyJwk = await keyToJwk(sign.privateKey);
+    const publicKeyJwk = await keyToJwk(sign.publicKey);
+    
+    // Store keys immediately (for both local and cross-AP)
+    localStorage.setItem("privateKey", JSON.stringify(privateKeyJwk));
+    localStorage.setItem("publicKey", JSON.stringify(publicKeyJwk));
+    
+    // Step 2: Hash recovery words (NEVER send plaintext)
+    const recoveryHash = await hashRecoveryWords(recoveryData.recoveryWords);
+    
+    // Step 3: Send recovery request with hash and public key
+    const content = {
+      username: recoveryData.username,
+      apIdentifier: recoveryData.apIdentifier,
+      recoveryHash: recoveryHash, // Only hash, never plaintext!
+      newPublicKey: publicKeyJwk,
+      tod: Date.now(),
+      type: "MT_RECOVERY",
+      priority: 1
+    };
+    
+    console.log("📤 Sending recovery request...");
+    
+    const response = await axios.post(
+      getApiURL() + "/recover-identity",
+      content
+    );
+    
+    console.log("✅ Recovery response received:", response.status);
+    
+    // Step 4: Handle response based on recovery type
+    console.log("Server response data:", response.data);
+    
+    // Handle signed response format (content + signature)
+    const responseContent = response.data.content || response.data;
+    console.log("Response content:", responseContent);
+    console.log("Response type:", responseContent.type);
+    
+    if (responseContent.type === "MT_RECOVERY_ACK") {
+      // LOCAL RECOVERY SUCCESS - immediate access with original identity
+      console.log("✅ Local recovery successful");
       return {
         type: 'local_success',
-        token: localResult.token
+        token: responseContent.token
       };
+    } else if (responseContent.type === "MT_RECOVERY_CROSS_AP_INITIATED") {
+      // CROSS-AP RECOVERY - immediate access with temporary identity
+      console.log("🔄 Cross-AP recovery initiated with temporary identity");
+      
+      // Store cross-AP recovery info for later completion
+      localStorage.setItem("pending_cross_ap_recovery", JSON.stringify({
+        tempUserId: responseContent.tempUserId,
+        tempUsername: responseContent.tempUsername,
+        originalUsername: responseContent.originalUsername
+      }));
+      
+      // Now need to send the encrypted cross-AP request
+      await submitCrossAPRequest(
+        recoveryData.username,
+        recoveryData.apIdentifier,
+        recoveryData.recoveryWords,
+        responseContent.tempUserId
+      );
+      
+      return {
+        type: 'cross_ap_initiated',
+        tempToken: responseContent.tempToken,
+        tempUserId: responseContent.tempUserId,
+        tempUsername: responseContent.tempUsername
+      };
+    } else {
+      console.log("❌ Unexpected response type:", responseContent.type);
+      console.log("Full response content:", responseContent);
+      throw new Error(responseContent.error || `Unexpected response type: ${responseContent.type}`);
     }
     
-    return await initiateCrossAPRecoveryWithTempIdentity(recoveryData);
-    
   } catch (error: unknown) {
-    console.error("Recovery error:", error);
+    console.error("❌ Recovery error:", error);
     
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
@@ -55,233 +140,84 @@ export async function recoverIdentity(recoveryData: RecoveryData): Promise<Recov
 }
 
 /**
- * Attempt local recovery - WITH EXTENSIVE DEBUG OUTPUT
+ * Submit encrypted cross-AP recovery request
  */
-async function attemptLocalRecovery(recoveryData: RecoveryData): Promise<{ token: string } | null> {
+async function submitCrossAPRequest(
+  username: string,
+  sourceApId: string, 
+  recoveryWords: string,
+  tempUserId: string
+) {
   try {
-    console.log("\n=== CLIENT RECOVERY DEBUG START ===");
-    console.log("🔄 Step 1: Generate new local keys");
+    console.log("🔐 Submitting encrypted cross-AP recovery request...");
     
-    // Generate fresh keys locally first
-    const { sign } = await generateKeys();
-    console.log("✅ Key pair generated");
+    // Import the recovery utility functions
+    const { 
+      createCrossAPRecoveryRequest, 
+      storeEphemeralKeys 
+    } = await import("@/Library/recoveryUtil");
     
-    const privateKeyJwk = await keyToJwk(sign.privateKey);
-    const publicKeyJwk = await keyToJwk(sign.publicKey);
+    // Get current AP certificate (this might need to be obtained differently)
+    const currentApCert = getCurrentApCertificate();
     
-    console.log("🔍 Generated key details:");
-    console.log("Private key type:", privateKeyJwk.kty);
-    console.log("Private key algorithm:", privateKeyJwk.alg);
-    console.log("Private key use:", privateKeyJwk.use);
-    console.log("Private key operations:", privateKeyJwk.key_ops);
-    console.log("Modulus length:", privateKeyJwk.n ? privateKeyJwk.n.length : "none");
-    
-    console.log("Public key type:", publicKeyJwk.kty);
-    console.log("Public key algorithm:", publicKeyJwk.alg);
-    console.log("Public key use:", publicKeyJwk.use);
-    console.log("Public key operations:", publicKeyJwk.key_ops);
-    console.log("Public modulus length:", publicKeyJwk.n ? publicKeyJwk.n.length : "none");
-    
-    // Store the new keys immediately
-    localStorage.setItem("privateKey", JSON.stringify(privateKeyJwk));
-    localStorage.setItem("publicKey", JSON.stringify(publicKeyJwk));
-    
-    console.log("✅ New keys stored in localStorage");
-    
-    console.log("🔄 Step 2: Send recovery request with new public key");
-    console.log("Username:", recoveryData.username);
-    console.log("AP Identifier:", recoveryData.apIdentifier);
-    console.log("Recovery words length:", recoveryData.recoveryWords.length);
-    
-    // Send recovery request with our new public key
-    const content = {
-      username: recoveryData.username,
-      apIdentifier: recoveryData.apIdentifier,
-      recoveryWords: recoveryData.recoveryWords,
-      newPublicKey: publicKeyJwk, // Send our new public key
-      tod: Date.now(),
-      type: "MT_RECOVERY",
-      priority: 1
-    };
-    
-    console.log("📤 Sending recovery request...");
-    console.log("Request content keys:", Object.keys(content));
-    console.log("Public key being sent:", {
-      kty: publicKeyJwk.kty,
-      alg: publicKeyJwk.alg,
-      hasN: !!publicKeyJwk.n,
-      nLength: publicKeyJwk.n?.length
-    });
-    
-    const response = await axios.post(
-      getApiURL() + "/recover-identity",
-      content
+    // Create encrypted cross-AP request
+    const { encryptedData, ephemeralKeyPair } = await createCrossAPRecoveryRequest(
+      username,
+      sourceApId,
+      recoveryWords,
+      tempUserId,
+      currentApCert
     );
     
-    console.log("✅ Server response received");
-    console.log("Response status:", response.status);
-    console.log("Response data keys:", Object.keys(response.data));
+    // Store ephemeral keys for later decryption
+    storeEphemeralKeys(tempUserId, ephemeralKeyPair);
     
-    const token = response.data.token || response.data.content?.token;
-    
-    if (token) {
-      console.log("✅ Token received from server");
-      console.log("Token length:", token.length);
-      console.log("Token parts count:", token.split('.').length);
-      console.log("Token preview:", token.substring(0, 100) + "...");
-      
-      // Parse and verify token content
-      try {
-        const tokenParts = token.split('.');
-        const tokenData = JSON.parse(atob(tokenParts[0]));
-        
-        console.log("🔍 Token content analysis:");
-        console.log("Username:", tokenData.mtUsername);
-        console.log("AP Reg:", tokenData.apReg);
-        console.log("Registration time:", new Date(tokenData.todReg).toISOString());
-        console.log("Has public key:", !!tokenData.mtPubKey);
-        
-        if (tokenData.mtPubKey) {
-          console.log("Token public key preview:", tokenData.mtPubKey.substring(0, 100) + "...");
-          console.log("Token public key length:", tokenData.mtPubKey.length);
-          
-          // Test if our private key can sign something that the token's public key can verify
-          console.log("🧪 Testing key compatibility...");
-          
-          const testMessage = "key compatibility test " + Date.now();
-          const encoder = new TextEncoder();
-          const data = encoder.encode(testMessage);
-          
-          // Sign with our private key
-          const signature = await window.crypto.subtle.sign(
-            {
-              name: 'RSA-PSS',
-              saltLength: 0,
-            },
-            sign.privateKey,
-            data
-          );
-          
-          console.log("✅ Test signature generated");
-          console.log("Signature length:", signature.byteLength);
-          
-          // Try to import the token's public key and verify
-          try {
-            const tokenPubKeyPem = tokenData.mtPubKey;
-            
-            // Clean the PEM string
-            const pemHeader = "-----BEGIN PUBLIC KEY-----";
-            const pemFooter = "-----END PUBLIC KEY-----";
-            const pemContents = tokenPubKeyPem.substring(
-              pemHeader.length,
-              tokenPubKeyPem.length - pemFooter.length
-            ).replace(/\s/g, '');
-            
-            const binaryDer = base64ToArrayBuffer(pemContents);
-            
-            const tokenPublicKey = await window.crypto.subtle.importKey(
-              'spki',
-              binaryDer,
-              {
-                name: 'RSA-PSS',
-                hash: 'SHA-256',
-              },
-              true,
-              ['verify']
-            );
-            
-            console.log("✅ Token public key imported successfully");
-            
-            // Verify signature
-            const isValid = await window.crypto.subtle.verify(
-              {
-                name: 'RSA-PSS',
-                saltLength: 0,
-              },
-              tokenPublicKey,
-              signature,
-              data
-            );
-            
-            console.log("🔍 Key compatibility test result:", isValid ? "✅ COMPATIBLE" : "❌ INCOMPATIBLE");
-            
-            if (!isValid) {
-              console.error("❌ CRITICAL: Keys are not compatible!");
-              console.error("This will cause authentication failures!");
-              
-              // Compare our public key with token's public key
-              const ourPublicKeySpki = await window.crypto.subtle.exportKey('spki', sign.publicKey);
-              const ourPublicKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(ourPublicKeySpki)));
-              const ourPublicKeyLines = ourPublicKeyBase64.match(/.{1,64}/g);
-              const ourPublicKeyPem = `-----BEGIN PUBLIC KEY-----\n${ourPublicKeyLines?.join('\n')}\n-----END PUBLIC KEY-----`;
-              
-              console.log("❌ OUR public key:");
-              console.log(ourPublicKeyPem.substring(0, 200) + "...");
-              console.log("❌ TOKEN public key:");
-              console.log(tokenPubKeyPem.substring(0, 200) + "...");
-              
-              const normalizeKey = (key: string) => key.replace(/[\r\n\s-]/g, '').replace(/BEGINPUBLICKEY|ENDPUBLICKEY/g, '');
-              
-              if (normalizeKey(ourPublicKeyPem) === normalizeKey(tokenPubKeyPem)) {
-                console.log("✅ Keys are identical (normalization issue)");
-              } else {
-                console.log("❌ Keys are completely different");
-              }
-            }
-            
-          } catch (verifyError) {
-            console.error("❌ Token key verification failed:", verifyError);
-          }
-        }
-        
-      } catch (parseError) {
-        console.error("❌ Token parsing failed:", parseError);
+    // Submit the encrypted request
+    const response = await axios.post(
+      getApiURL() + "/submit-cross-ap-request",
+      {
+        encryptedData,
+        tempUserId,
+        tod: Date.now()
       }
-      
-      console.log("✅ Recovery successful - keys and token synchronized");
-      console.log("=== CLIENT RECOVERY DEBUG END ===\n");
-      return { token };
-    }
+    );
     
-    console.log("❌ No token received from server");
-    console.log("=== CLIENT RECOVERY DEBUG END ===\n");
-    return null;
+    console.log("✅ Cross-AP request submitted successfully");
+    return response.data;
     
-  } catch (error : any) {
-    console.error("❌ Local recovery failed:", error);
-    console.error("Error details:", {
-      name: error.name,
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data
-    });
-    console.log("=== CLIENT RECOVERY DEBUG END ===\n");
-    return null;
+  } catch (error) {
+    console.error("❌ Error submitting cross-AP request:", error);
+    throw error;
   }
 }
 
 /**
- * Helper function for base64 to ArrayBuffer conversion
+ * Get current AP certificate (placeholder - implement based on your AP discovery)
  */
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binaryString = window.atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+function getCurrentApCertificate(): string {
+  // TODO: Implement proper AP certificate retrieval
+  // This could come from:
+  // - HelloWrapper AP data
+  // - Local storage
+  // - Configuration
+  
+  // For now, try to get it from APDataReference
+  try {
+    const { APDataReference } = require("@/Library/APData");
+    if (APDataReference.current && APDataReference.current.cert) {
+      return APDataReference.current.cert;
+    }
+  } catch (e) {
+    console.warn("Could not get AP certificate from APDataReference");
   }
-  return bytes.buffer;
+  
+  // Fallback - this needs to be implemented properly
+  throw new Error("Current AP certificate not available - implement AP certificate discovery");
 }
 
-// Rest of the functions remain the same...
-async function initiateCrossAPRecoveryWithTempIdentity(recoveryData: RecoveryData): Promise<RecoveryResponse> {
-  // Implementation stays the same as before
-  return {
-    type: 'cross_ap_initiated',
-    message: "Cross-AP recovery not implemented in this fix"
-  };
-}
-
+/**
+ * Check cross-AP recovery status
+ */
 export async function checkRecoveryStatus(tempUserId: string) {
   try {
     const response = await axios.post(
@@ -303,19 +239,44 @@ export async function checkRecoveryStatus(tempUserId: string) {
   }
 }
 
+/**
+ * Complete cross-AP recovery by getting the response
+ */
 export async function completeRecovery(tempUserId: string, recoveryWords: string) {
   try {
+    // Get the encrypted response
     const response = await axios.post(
-      getApiURL() + "/get-recovery-response",
+      getApiURL() + "/get-cross-ap-recovery-response",
       {
         tempUserId,
         tod: Date.now()
       }
     );
     
-    if (response.data.token) {
+    if (!response.data.encryptedTokenData) {
+      throw new Error("No recovery response available");
+    }
+    
+    // Retrieve ephemeral keys for decryption
+    const { retrieveEphemeralKeys, decryptRecoveryResponse, clearEphemeralKeys } = await import("@/Library/recoveryUtil");
+    
+    const ephemeralKeys = await retrieveEphemeralKeys(tempUserId);
+    if (!ephemeralKeys) {
+      throw new Error("Ephemeral keys not found - cannot decrypt response");
+    }
+    
+    // Decrypt the response
+    const decryptedResponse = await decryptRecoveryResponse(
+      response.data.encryptedTokenData,
+      ephemeralKeys.privateKey
+    );
+    
+    // Clean up ephemeral keys
+    clearEphemeralKeys(tempUserId);
+    
+    if (decryptedResponse.token) {
       return {
-        token: response.data.token,
+        token: decryptedResponse.token,
         timestamp: Date.now()
       };
     } else {
@@ -328,6 +289,9 @@ export async function completeRecovery(tempUserId: string, recoveryWords: string
   }
 }
 
+/**
+ * Check if user has local recovery data
+ */
 export function checkLocalRecoveryData(username: string, apIdentifier: string): boolean {
   try {
     const storeString = localStorage.getItem("store");
