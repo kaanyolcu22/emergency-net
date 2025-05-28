@@ -1,3 +1,4 @@
+// src/routes.tsx - Updated routes without separate recovery flows
 import { RouteObject } from "react-router-dom";
 import Register from "./Pages/Register";
 import HelloWrapper from "./Components/HelloWrapper";
@@ -7,8 +8,6 @@ import SyncWrapper from "./Components/SyncWrapper";
 import PURegister from "./Pages/PURegister";
 import RecoveryWords from "./Pages/RecoveryWords";
 import Recovery from "./Pages/Recovery";
-import CrossAPRecovery from "./Pages/CrossAPRecovery";
-import TempRecoveryFlow from "./Pages/TempRecoveryFlow";
 
 export const routes: RouteObject[] = [
   {
@@ -19,16 +18,13 @@ export const routes: RouteObject[] = [
       { path: "register", element: <Register /> },
       { path: "PUregister", element: <PURegister /> },
       
-      
       {
         element: <SyncWrapper />,
         children: [
           { path: "home", element: <Home /> },
           { path: "channel/:channelName", element: <Channel /> },
           { path: "/recovery", element: <Recovery /> },
-          { path: "/cross-ap-recovery", element: <CrossAPRecovery /> },
           { path: "/recovery-words", element: <RecoveryWords /> },
-          { path: "/temp-recovery", element: <TempRecoveryFlow />,},
         ],
       },
     ],

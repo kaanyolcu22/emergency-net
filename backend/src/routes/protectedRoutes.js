@@ -1,3 +1,4 @@
+// src/routes/protectedRoutes.js - Updated with unified recovery endpoints
 import express from 'express';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { messageController } from '../controller/MessageController.js';
@@ -18,7 +19,7 @@ protectedRouter.delete("/channel", channelController.destroyChannel.bind(channel
 protectedRouter.post("/request-to-certify", certifyController.requestToCertify.bind(certifyController));
 protectedRouter.post("/certify", certifyController.certify.bind(certifyController));
 
-// Cross-AP Recovery Routes
+// Unified Recovery Routes
 protectedRouter.post("/check-cross-ap-recovery-status", recoveryController.checkCrossAPRecoveryStatus.bind(recoveryController));
 protectedRouter.post("/get-recovery-response", recoveryController.getRecoveryResponse.bind(recoveryController));
 protectedRouter.post("/cross-ap-recovery-sync", recoveryController.processCrossAPRecoverySync.bind(recoveryController));

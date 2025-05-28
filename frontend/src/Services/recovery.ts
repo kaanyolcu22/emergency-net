@@ -1,3 +1,4 @@
+// src/Services/recovery.ts - Unified recovery service
 import { getApiURL } from "@/Library/getApiURL";
 import axios, { AxiosError } from "axios";  
 import { setCookie } from "typescript-cookie";
@@ -17,25 +18,33 @@ interface RecoveryData {
   recoveryWords: string;
 }
 
-interface CrossAPRecoveryData extends RecoveryData {
+interface RecoveryResponse {
+  type: 'local_success' | 'cross_ap_initiated';
+  token?: string;
+  tempToken?: string;
   tempUserId?: string;
+  tempUsername?: string;
+  message?: string;
 }
 
 /**
- * Main recovery function - handles both local and cross-AP recovery
+ * Unified recovery function - handles both local and cross-AP automatically
  */
-export async function recoverIdentity(recoveryData: RecoveryData) {
+export async function recoverIdentity(recoveryData: RecoveryData): Promise<RecoveryResponse> {
   try {
-    console.log(`Attempting recovery for user: ${recoveryData.username}@${recoveryData.apIdentifier}`);
+    console.log(`Starting unified recovery for: ${recoveryData.username}@${recoveryData.apIdentifier}`);
     
-    // First try local recovery
+    // First attempt local recovery
     const localResult = await attemptLocalRecovery(recoveryData);
     if (localResult) {
-      return localResult;
+      return {
+        type: 'local_success',
+        token: localResult.token
+      };
     }
     
-    // If local recovery fails, initiate cross-AP recovery
-    return await initiateCrossAPRecovery(recoveryData);
+    // If local fails, initiate cross-AP recovery with temporary identity
+    return await initiateCrossAPRecoveryWithTempIdentity(recoveryData);
     
   } catch (error: unknown) {
     console.error("Recovery error:", error);
@@ -57,9 +66,9 @@ export async function recoverIdentity(recoveryData: RecoveryData) {
 }
 
 /**
- * Attempt local recovery first
+ * Attempt local recovery at current AP
  */
-async function attemptLocalRecovery(recoveryData: RecoveryData) {
+async function attemptLocalRecovery(recoveryData: RecoveryData): Promise<{ token: string } | null> {
   try {
     const content = {
       username: recoveryData.username,
@@ -77,74 +86,77 @@ async function attemptLocalRecovery(recoveryData: RecoveryData) {
     
     console.log("Local recovery successful");
     
-    // Extract token from response
-    let token = response.data.token || response.data.content?.token;
+    const token = response.data.token || response.data.content?.token;
     
     if (token) {
-      await handleSuccessfulRecovery(token);
-      return { token, local: true };
+      return { token };
     }
     
-    return null; // Local recovery failed, try cross-AP
+    return null;
     
   } catch (error) {
-    console.log("Local recovery failed, trying cross-AP recovery");
+    console.log("Local recovery failed, initiating cross-AP recovery");
     return null;
   }
 }
 
 /**
- * Initiate cross-AP recovery with client-side key generation
+ * Initiate cross-AP recovery and create temporary identity
  */
-async function initiateCrossAPRecovery(recoveryData: RecoveryData) {
+async function initiateCrossAPRecoveryWithTempIdentity(recoveryData: RecoveryData): Promise<RecoveryResponse> {
   try {
-    // Generate temporary user ID
+    // Generate temporary user ID and username
     const tempUserId = generateTempUserId(recoveryData.username, recoveryData.apIdentifier);
+    const currentApId = await getCurrentApId();
+    const tempUsername = `${recoveryData.username}@${recoveryData.apIdentifier}-temp@${currentApId}`;
     
-    // Get current AP's public key (AP2)
+    // Get current AP's certificate
     const apInfoResponse = await axios.get(getApiURL() + "/hello");
-    const apPublicKey = apInfoResponse.data.content?.cert; // This needs to be extracted properly
+    let apCertificate = apInfoResponse.data.content?.cert || apInfoResponse.data.cert;
     
-    if (!apPublicKey) {
-      throw new Error("Could not get AP public key");
+    if (!apCertificate) {
+      throw new Error("Could not get AP certificate");
     }
     
-    // Create client-side recovery request with ephemeral keys
+    // Create encrypted recovery request
     const { encryptedData, ephemeralKeyPair } = await createClientSideRecoveryRequest(
       recoveryData.username,
       recoveryData.apIdentifier,
       recoveryData.recoveryWords,
       tempUserId,
-      apPublicKey
+      apCertificate
     );
     
-    // Store ephemeral keys for later decryption
+    // Store ephemeral keys
     storeEphemeralKeys(tempUserId, ephemeralKeyPair);
     
-    // Send encrypted recovery request to AP2
+    // Send cross-AP recovery request with temporary identity creation
     const requestContent = {
       tempUserId,
+      tempUsername,
+      originalUsername: `${recoveryData.username}@${recoveryData.apIdentifier}`,
       encryptedRecoveryData: encryptedData,
       destinationApId: recoveryData.apIdentifier,
       tod: Date.now(),
-      type: "MT_CROSS_AP_RECOVERY_REQUEST"
+      type: "MT_CROSS_AP_RECOVERY_WITH_TEMP"
     };
     
     const response = await axios.post(
-      getApiURL() + "/initiate-cross-ap-recovery",
+      getApiURL() + "/initiate-cross-ap-recovery-with-temp",
       requestContent
     );
     
-    console.log("Cross-AP recovery initiated");
+    console.log("Cross-AP recovery with temp identity initiated");
     
-    // Store recovery request info for status checking
-    localStorage.setItem("cross_ap_recovery_temp_user", tempUserId);
-    localStorage.setItem("cross_ap_recovery_original_user", `${recoveryData.username}@${recoveryData.apIdentifier}`);
+    // Extract temporary token from response
+    const tempToken = response.data.tempToken || response.data.content?.tempToken;
     
     return {
-      status: "cross_ap_initiated",
+      type: 'cross_ap_initiated',
+      tempToken,
       tempUserId,
-      message: "Cross-AP recovery request sent. Please wait for response."
+      tempUsername,
+      message: "Cross-AP recovery initiated with temporary identity"
     };
     
   } catch (error) {
@@ -154,9 +166,9 @@ async function initiateCrossAPRecovery(recoveryData: RecoveryData) {
 }
 
 /**
- * Check status of cross-AP recovery
+ * Check recovery status
  */
-export async function checkCrossAPRecoveryStatus(tempUserId: string) {
+export async function checkRecoveryStatus(tempUserId: string) {
   try {
     const response = await axios.post(
       getApiURL() + "/check-cross-ap-recovery-status",
@@ -178,9 +190,9 @@ export async function checkCrossAPRecoveryStatus(tempUserId: string) {
 }
 
 /**
- * Complete cross-AP recovery by decrypting response
+ * Complete cross-AP recovery
  */
-export async function completeCrossAPRecovery(tempUserId: string) {
+export async function completeRecovery(tempUserId: string, recoveryWords: string) {
   try {
     // Get recovery response from server
     const response = await axios.post(
@@ -207,13 +219,10 @@ export async function completeCrossAPRecovery(tempUserId: string) {
       ephemeralKeys.privateKey
     );
     
-    // Clean up ephemeral keys
+    // Clean up
     clearEphemeralKeys(tempUserId);
-    localStorage.removeItem("cross_ap_recovery_temp_user");
-    localStorage.removeItem("cross_ap_recovery_original_user");
     
     if (decryptedResponse.token) {
-      await handleSuccessfulRecovery(decryptedResponse.token);
       return {
         token: decryptedResponse.token,
         timestamp: decryptedResponse.timestamp
@@ -229,27 +238,15 @@ export async function completeCrossAPRecovery(tempUserId: string) {
 }
 
 /**
- * Handle successful recovery (common for both local and cross-AP)
+ * Get current AP ID
  */
-async function handleSuccessfulRecovery(token: string) {
-  console.log("Setting up recovered identity");
-  
-  setCookie("token", token, {
-    sameSite: "Lax",
-    secure: location.protocol === 'https:',
-    expires: 365,
-    path: '/'
-  });
-  
-  axios.defaults.headers.common['Authorization'] = token;
-  localStorage.setItem("emergency_token", token);
-  
+async function getCurrentApId(): Promise<string> {
   try {
-    console.log("Performing emergency sync after recovery");
-    await emergencySync();
-    console.log("Emergency sync completed successfully");
-  } catch (syncError) {
-    console.error("Emergency sync failed:", syncError);
+    const response = await axios.get(getApiURL() + "/hello");
+    return response.data.content?.id || response.data.id || "unknown";
+  } catch (error) {
+    console.error("Error getting current AP ID:", error);
+    return "unknown";
   }
 }
 
@@ -274,46 +271,4 @@ export function checkLocalRecoveryData(username: string, apIdentifier: string): 
     console.error("Error checking local recovery data:", error);
     return false;
   }
-}
-
-/**
- * Get pending cross-AP recovery info
- */
-export function getPendingCrossAPRecovery(): {
-  tempUserId: string;
-  originalUser: string;
-} | null {
-  const tempUserId = localStorage.getItem("cross_ap_recovery_temp_user");
-  const originalUser = localStorage.getItem("cross_ap_recovery_original_user");
-  
-  if (tempUserId && originalUser) {
-    return { tempUserId, originalUser };
-  }
-  
-  return null;
-}
-
-/**
- * Cancel pending cross-AP recovery
- */
-export function cancelCrossAPRecovery(): void {
-  const tempUserId = localStorage.getItem("cross_ap_recovery_temp_user");
-  
-  if (tempUserId) {
-    clearEphemeralKeys(tempUserId);
-    localStorage.removeItem("cross_ap_recovery_temp_user");
-    localStorage.removeItem("cross_ap_recovery_original_user");
-  }
-}
-
-// Legacy functions for backward compatibility
-export async function checkRecoveryStatus(recoveryRequestId: string) {
-  // Map to new cross-AP recovery status check
-  return await checkCrossAPRecoveryStatus(recoveryRequestId);
-}
-
-export async function completeRecovery(recoveryRequestId: string, recoveryWords: string) {
-  // For the new system, recovery words are not needed for completion
-  // since they were used to generate the ephemeral keys initially
-  return await completeCrossAPRecovery(recoveryRequestId);
 }

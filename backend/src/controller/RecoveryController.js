@@ -1,12 +1,11 @@
-// Updated RecoveryController.js with hybrid decryption support
-
+// src/controllers/RecoveryController.js - Unified recovery controller
 import { apId } from "../../bin/www.js";
 import { User } from "../database/entity/User.js";
 import { AppDataSource } from "../database/newDbSetup.js";
 import { 
   verifyRecoveryPhrase, 
   deriveKeyFromRecoveryPhrase, 
-  generateKeyPairFromSeed ,
+  generateKeyPairFromSeed,
   hashRecoveryPhrase,
   generateRecoveryWords
 } from "../util/RecoveryUtil.js";
@@ -26,7 +25,7 @@ import crypto from 'crypto';
 
 class RecoveryController {
 
-  // Local recovery - same AP
+  // Unified recovery - handles local and cross-AP automatically
   async recoverIdentity(req, res) {
     const tod_received = req.body.tod;
     if (!checkTod(tod_received)) {
@@ -52,7 +51,12 @@ class RecoveryController {
     }
 
     try {
-      if (apIdentifier !== apId) {
+      // Check if this is local recovery (same AP)
+      if (apIdentifier === apId) {
+        console.log("Attempting local recovery for:", username);
+        return await this.handleLocalRecovery(req, res, username, apIdentifier, recoveryWords);
+      } else {
+        console.log("User registered at different AP, rejecting for cross-AP handling");
         return res.status(400).json({
           id: apId,
           tod: Date.now(),
@@ -61,7 +65,21 @@ class RecoveryController {
           error: "User not registered at this AP. Use cross-AP recovery."
         });
       }
+    } catch (error) {
+      console.error("Recovery error:", error);
+      return res.status(500).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_RECOVERY_RJT",
+        error: "Internal server error during recovery."
+      });
+    }
+  }
 
+  // Handle local recovery
+  async handleLocalRecovery(req, res, username, apIdentifier, recoveryWords) {
+    try {
       const fullUsername = `${username}@${apIdentifier}`;
       
       let user = await AppDataSource.manager.findOneBy(User, { 
@@ -80,7 +98,7 @@ class RecoveryController {
           tod: Date.now(),
           priority: -1,
           type: "MT_RECOVERY_RJT",
-          error: "User not found."
+          error: "User not found at this AP."
         });
       }
       
@@ -127,23 +145,22 @@ class RecoveryController {
         tod: Date.now(),
         priority: -1,
         type: "MT_RECOVERY_ACK",
-        adminPubKey: getAdminPublicKey().toString(),
         token
       });
     } catch (error) {
-      console.error("Recovery error:", error);
+      console.error("Local recovery error:", error);
       return res.status(500).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
         type: "MT_RECOVERY_RJT",
-        error: "Internal server error during recovery."
+        error: "Internal server error during local recovery."
       });
     }
   }
 
-  // Initiate cross-AP recovery - client sends encrypted data
-  async initiateCrossAPRecovery(req, res) {
+  // Initiate cross-AP recovery with temporary identity
+  async initiateCrossAPRecoveryWithTempIdentity(req, res) {
     const tod_received = req.body.tod;
     if (!checkTod(tod_received)) {
       return res.status(408).json({
@@ -155,9 +172,9 @@ class RecoveryController {
       });
     }
 
-    const { tempUserId, encryptedRecoveryData, destinationApId } = req.body;
+    const { tempUserId, tempUsername, originalUsername, encryptedRecoveryData, destinationApId } = req.body;
 
-    if (!tempUserId || !encryptedRecoveryData || !destinationApId) {
+    if (!tempUserId || !tempUsername || !originalUsername || !encryptedRecoveryData || !destinationApId) {
       return res.status(400).json({
         id: apId,
         tod: Date.now(),
@@ -168,21 +185,15 @@ class RecoveryController {
     }
 
     try {
-      console.log("🔄 Processing cross-AP recovery initiation...");
-      console.log("Temp User ID:", tempUserId);
-      console.log("Destination AP ID:", destinationApId);
-      console.log("Encrypted data length:", encryptedRecoveryData?.length);
+      console.log("🔄 Processing cross-AP recovery with temp identity...");
+      console.log("Temp Username:", tempUsername);
+      console.log("Original Username:", originalUsername);
+      console.log("Destination AP:", destinationApId);
 
-      // Decrypt the recovery data using hybrid decryption
-      console.log("🔓 Decrypting recovery request data...");
+      // Decrypt the recovery data
       const recoveryRequestData = await decryptRecoveryRequestData(encryptedRecoveryData);
       
-      console.log("✅ Recovery request data decrypted successfully");
-      console.log("Decrypted data keys:", Object.keys(recoveryRequestData));
-      console.log("Real User ID:", recoveryRequestData.realUserId);
-      console.log("Source AP ID:", recoveryRequestData.sourceApId);
-
-      // Create cross-AP recovery request for propagation
+      // Create cross-AP recovery request
       const crossAPRequest = {
         tempUserId,
         requestingApId: apId,
@@ -197,22 +208,36 @@ class RecoveryController {
       };
 
       // Save to database for propagation
-      console.log("💾 Saving cross-AP recovery request to database...");
       await AppDataSource.manager.save(CrossAPRecoveryRequest, crossAPRequest);
-      console.log("✅ Cross-AP recovery request saved successfully");
+      
+      // Create temporary token for immediate use
+      const tempTokenData = {
+        apReg: apId,
+        todReg: Date.now(),
+        mtUsername: tempUsername,
+        mtPubKey: "temp_key_placeholder",
+        isTemporary: true,
+        originalUsername: originalUsername,
+        tempUserId: tempUserId
+      };
+      
+      // Generate a temporary token (simplified for demo)
+      const tempToken = this.createTemporaryToken(tempTokenData);
 
       return res.status(200).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
         type: "MT_CROSS_AP_RECOVERY_ACK",
-        message: "Cross-AP recovery request initiated successfully."
+        tempToken: tempToken,
+        tempUserId: tempUserId,
+        tempUsername: tempUsername,
+        message: "Cross-AP recovery initiated with temporary identity."
       });
 
     } catch (error) {
       console.error("❌ Cross-AP recovery initiation error:", error);
       
-      // Provide more specific error messages
       let errorMessage = "Failed to process recovery request.";
       if (error.message.includes("Hybrid decryption failed")) {
         errorMessage = "Failed to decrypt recovery data. Please check your recovery words.";
@@ -230,6 +255,14 @@ class RecoveryController {
         error: errorMessage
       });
     }
+  }
+
+  // Create temporary token (simplified)
+  createTemporaryToken(tokenData) {
+    const encodedData = Buffer.from(JSON.stringify(tokenData)).toString('base64');
+    const tempSignature = "temp_signature_" + Date.now();
+    const tempCert = "temp_cert";
+    return `${encodedData}.${tempSignature}.${tempCert}`;
   }
 
   // Check cross-AP recovery status
@@ -312,7 +345,7 @@ class RecoveryController {
     }
   }
 
-  // Get recovery response for completion
+  // Get recovery response
   async getRecoveryResponse(req, res) {
     const { tempUserId } = req.body;
 
@@ -361,7 +394,7 @@ class RecoveryController {
     }
   }
 
-  // Process incoming cross-AP recovery requests and responses
+  // Process cross-AP recovery sync
   async processCrossAPRecoverySync(req, res) {
     try {
       const { crossAPRequests, crossAPResponses } = req.body;
