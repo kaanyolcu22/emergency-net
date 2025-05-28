@@ -24,7 +24,7 @@ function Recovery() {
   const [tempUserId, setTempUserId] = useState("");
   const [tempUsername, setTempUsername] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const { store, sync, isLoading: isSyncLoading } = useSyncStore();
+  const { sync, isLoading: isSyncLoading } = useSyncStore();
   
   const handleWordChange = (index: number, value: string) => {
     const newWords = [...words];

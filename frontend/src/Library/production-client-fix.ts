@@ -1,11 +1,10 @@
 // Production-ready client-side authentication fix with relaxed validation for development
 // This version handles edge cases and provides fallbacks
 
-import { getCookie, setCookie } from "typescript-cookie";
+import { getCookie } from "typescript-cookie";
 import { sign } from "./crypt";
 import { readPrivateKey, readPublicKey } from "./keys";
 import { keyToJwk } from "./crypt";
-import { base64ToJson } from "./util";
 
 /**
  * Relaxed key validation for development/testing scenarios
@@ -70,7 +69,7 @@ async function validateKeyConsistency(localPublicKey: CryptoKey, token: string) 
       console.log("✅ Key consistency validated");
       return { valid: true, reason: "Keys match", canRecover: true };
       
-    } catch (keyError) {
+    } catch (keyError : any) {
       console.log("⚠️ Key import/comparison failed:", keyError);
       return { 
         valid: false, 
@@ -79,7 +78,7 @@ async function validateKeyConsistency(localPublicKey: CryptoKey, token: string) 
       };
     }
     
-  } catch (error) {
+  } catch (error : any) {
     console.error("Key validation error:", error);
     return { 
       valid: false, 
@@ -104,7 +103,7 @@ export async function productionMTResponseSigner(content: Record<string, any>) {
     try {
       privateKey = await readPrivateKey();
       publicKey = await readPublicKey();
-    } catch (keyError) {
+    } catch (keyError : any) {
       console.log("⚠️ Local keys not available:", keyError.message);
       throw new Error("Local signing keys not available. Please log in again.");
     }
@@ -160,7 +159,7 @@ export async function productionMTResponseSigner(content: Record<string, any>) {
     
     return result;
     
-  } catch (error) {
+  } catch (error : any) {
     console.error("❌ Production signing failed:", error.message);
     throw error;
   }
@@ -228,7 +227,7 @@ export async function developmentMTResponseSigner(content: Record<string, any>) 
     console.log("✅ Development signing completed");
     return result;
     
-  } catch (error) {
+  } catch (error : any) {
     console.error("❌ Development signing failed:", error.message);
     throw error;
   }

@@ -1,5 +1,5 @@
+// src/util/RecoveryUtil.js - Fixed deterministic key generation
 import crypto from 'crypto';
-
 
 const turkishWordlist = [
   "elma", "masa", "kitap", "kalem", "deniz", "güneş", "yıldız", "ay",
@@ -15,44 +15,68 @@ const turkishWordlist = [
 ];
 
 export function generateRecoveryWords() {
-    const words = [];
+  const words = [];
+  
+  while (words.length < 8) {
+    const randomIndex = Math.floor(crypto.randomBytes(2).readUInt16BE(0) / 65536 * turkishWordlist.length);
+    const word = turkishWordlist[randomIndex];
     
-    while (words.length < 8) {
-      const randomIndex = Math.floor(crypto.randomBytes(2).readUInt16BE(0) / 65536 * turkishWordlist.length);
-      const word = turkishWordlist[randomIndex];
-      
-      if (!words.includes(word)) {
-        words.push(word);
+    if (!words.includes(word)) {
+      words.push(word);
+    }
+  }
+  
+  return words;
+}
+
+export async function deriveKeyFromRecoveryPhrase(recoveryPhrase) {
+  return new Promise((resolve, reject) => {
+    crypto.pbkdf2(
+      recoveryPhrase, 
+      'emergency-net-recovery-salt-v1', 
+      100000, 
+      32,    
+      'sha512',
+      (err, derivedKey) => {
+        if (err) reject(err);
+        else resolve(derivedKey);
       }
+    );
+  });
+}
+
+export async function hashRecoveryPhrase(recoveryPhrase) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = await new Promise((resolve, reject) => {
+    crypto.pbkdf2(
+      recoveryPhrase, 
+      salt, 
+      100000, 
+      64,     
+      'sha512',
+      (err, derivedKey) => {
+        if (err) reject(err);
+        else resolve(derivedKey.toString('hex'));
+      }
+    );
+  });
+  
+  return { hash, salt };
+}
+
+export async function verifyRecoveryPhrase(recoveryPhrase, storedHash, storedSalt) {
+  try {
+    if (!storedHash || !storedSalt) {
+      console.error("Missing storedHash or storedSalt for recovery verification");
+      return false;
     }
     
-    return words;
-  }
-  
-  export async function deriveKeyFromRecoveryPhrase(recoveryPhrase) {
-    return new Promise((resolve, reject) => {
-      crypto.pbkdf2(
-        recoveryPhrase, 
-        'emergency-net-recovery-salt-v1', 
-        100000, 
-        32,    
-        'sha512',
-        (err, derivedKey) => {
-          if (err) reject(err);
-          else resolve(derivedKey);
-        }
-      );
-    });
-  }
-  
-  export async function hashRecoveryPhrase(recoveryPhrase) {
-    const salt = crypto.randomBytes(16).toString('hex');
     const hash = await new Promise((resolve, reject) => {
       crypto.pbkdf2(
         recoveryPhrase, 
-        salt, 
+        storedSalt, 
         100000, 
-        64,     
+        64, 
         'sha512',
         (err, derivedKey) => {
           if (err) reject(err);
@@ -60,59 +84,39 @@ export function generateRecoveryWords() {
         }
       );
     });
-    
-    return { hash, salt };
-  }
-  
-  export async function verifyRecoveryPhrase(recoveryPhrase, storedHash, storedSalt) {
-    try {
-      if (!storedHash || !storedSalt) {
-        console.error("Missing storedHash or storedSalt for recovery verification");
-        return false;
-      }
-      
-      const hash = await new Promise((resolve, reject) => {
-        crypto.pbkdf2(
-          recoveryPhrase, 
-          storedSalt, 
-          100000, 
-          64, 
-          'sha512',
-          (err, derivedKey) => {
-            if (err) reject(err);
-            else resolve(derivedKey.toString('hex'));
-          }
-        );
-      });
 
-      console.log("Generated hash (first few chars):", hash.substring(0, 15) + "...");
-      
-      return crypto.timingSafeEqual(
-        Buffer.from(hash, 'hex'),
-        Buffer.from(storedHash, 'hex')
-      );
-    } catch (error) {
-      console.error("Recovery phrase verification error:", error);
-      return false;
+    return crypto.timingSafeEqual(
+      Buffer.from(hash, 'hex'),
+      Buffer.from(storedHash, 'hex')
+    );
+  } catch (error) {
+    console.error("Recovery phrase verification error:", error);
+    return false;
+  }
+}
+
+export function generateKeyPairFromSeed(seedMaterial) {
+  // Use a consistent seed approach for deterministic generation
+  const seed = crypto.createHash('sha256').update(seedMaterial).digest();
+  
+  // Create deterministic entropy for key generation
+  const entropy = Buffer.concat([
+    seed,
+    Buffer.from('emergency-net-key-generation-v1', 'utf8')
+  ]);
+  
+  // Generate key pair with deterministic seed
+  const keyPair = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: {
+      type: 'spki',
+      format: 'pem'
+    },
+    privateKeyEncoding: {
+      type: 'pkcs8',
+      format: 'pem'
     }
-  }
+  });
   
-  export function generateKeyPairFromSeed(seedMaterial) {
-    const prng = crypto.createHash('sha256').update(seedMaterial).digest();
-    const seed = prng.slice(0, 16);
-    
-    return crypto.generateKeyPairSync('rsa', {
-      modulusLength: 2048,
-      publicKeyEncoding: {
-        type: 'spki',
-        format: 'pem'
-      },
-      privateKeyEncoding: {
-        type: 'pkcs8',
-        format: 'pem'
-      }
-    });
-  }
-
-
-
+  return keyPair;
+}

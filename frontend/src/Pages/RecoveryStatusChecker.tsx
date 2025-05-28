@@ -5,7 +5,7 @@ import { Button } from "@/Components/ui/button";
 import { checkRecoveryStatus, completeRecovery } from "@/Services/recovery";
 import { setCookie } from "typescript-cookie";
 import axios from "axios";
-import { Loader2, RefreshCw, UserCheck } from 'lucide-react';
+import { RefreshCw, UserCheck } from 'lucide-react';
 
 function RecoveryStatusChecker() {
   const { toast } = useToast();
