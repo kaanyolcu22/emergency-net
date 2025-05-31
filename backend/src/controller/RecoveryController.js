@@ -16,6 +16,9 @@ import { CrossAPRecoveryRequest } from "../database/entity/CrossApRecoveryReques
 import { CrossAPRecoveryResponse } from "../database/entity/CrossApRecoveryResponse.js";
 import crypto from "crypto";
 
+const MAX_RECOVERY_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
 class RecoveryController {
 
   async recoverIdentity(req, res) {
@@ -60,20 +63,26 @@ class RecoveryController {
   }
 
   async handleLocalRecovery(req, res, username, apIdentifier, recoveryHash, newPublicKey) {
+    // Start a database transaction to ensure data consistency
+    const queryRunner = AppDataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
       const fullUsername = `${username}@${apIdentifier}`;
       
-      let user = await AppDataSource.manager.findOneBy(User, { 
+      let user = await queryRunner.manager.findOneBy(User, { 
         username: fullUsername 
       });
       
       if (!user) {
-        user = await AppDataSource.manager.findOneBy(User, {
+        user = await queryRunner.manager.findOneBy(User, {
           username: username
         });
       }
       
       if (!user) {
+        await queryRunner.commitTransaction();
         return res.status(404).json({
           id: apId,
           tod: Date.now(),
@@ -84,6 +93,7 @@ class RecoveryController {
       }
       
       if (!user.recoveryKeyHash) {
+        await queryRunner.commitTransaction();
         return res.status(400).json({
           id: apId,
           tod: Date.now(),
@@ -92,7 +102,23 @@ class RecoveryController {
           error: "User account doesn't have recovery data."
         });
       }
+
+      // Check if the user is currently locked out
+      const lockStatus = await this.checkLockStatus(user);
+      if (lockStatus.isLocked) {
+        await queryRunner.commitTransaction();
+        return res.status(423).json({ // 423 = Locked status code
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_RECOVERY_LOCKED",
+          error: `Account locked until ${lockStatus.unlockTime}`,
+          lockedUntil: lockStatus.unlockTime,
+          attemptsRemaining: 0
+        });
+      }
       
+      // Test the recovery hash against stored hash with variations
       const hashVariations = [recoveryHash];
       
       const possibleWords = [
@@ -106,53 +132,77 @@ class RecoveryController {
           const testHash = crypto.createHash('sha256').update(words).digest('hex');
           hashVariations.push(testHash);
         } catch (e) {
-          // Silent fail
+          // Silent fail for hash generation errors
         }
       }
       
       const isValid = hashVariations.includes(user.recoveryKeyHash);
       
-      if (!isValid) {
-        return res.status(401).json({
+      if (isValid) {
+        // SUCCESS: Reset attempts and proceed with recovery
+        await this.resetAttempts(queryRunner, user);
+        
+        let publicKeyForToken;
+        
+        if (newPublicKey) {
+          try {
+            const clientPubKeyPem = await this.jwkToPem(newPublicKey);
+            publicKeyForToken = Buffer.from(clientPubKeyPem, 'utf8');
+          } catch (jwkError) {
+            throw jwkError;
+          }
+        }
+        
+        const token = createToken(user.username, publicKeyForToken);
+        
+        await queryRunner.manager.update(
+          User,
+          { username: user.username },
+          { recoveryKeyUpdatedAt: new Date() }
+        );
+        
+        await queryRunner.commitTransaction();
+        
+        const response = {
           id: apId,
           tod: Date.now(),
           priority: -1,
-          type: "MT_RECOVERY_RJT",
-          error: "Invalid recovery credentials."
-        });
-      }
-      
-      let publicKeyForToken;
-      
-      if (newPublicKey) {
-        try {
-          const clientPubKeyPem = await this.jwkToPem(newPublicKey);
-          publicKeyForToken = Buffer.from(clientPubKeyPem, 'utf8');
-        } catch (jwkError) {
-          throw jwkError;
+          type: "MT_RECOVERY_ACK",
+          adminPubKey: getAdminPublicKey().toString(),
+          token
+        };
+        
+        return res.status(200).json(response);
+        
+      } else {
+        // FAILURE: Record the failed attempt
+        const attemptResult = await this.recordFailedAttempt(queryRunner, user);
+        await queryRunner.commitTransaction();
+        
+        if (attemptResult.isLocked) {
+          return res.status(423).json({
+            id: apId,
+            tod: Date.now(),
+            priority: -1,
+            type: "MT_RECOVERY_LOCKED",
+            error: "Too many failed attempts. Account locked for 24 hours.",
+            lockedUntil: attemptResult.lockUntil,
+            attemptsRemaining: 0
+          });
+        } else {
+          return res.status(401).json({
+            id: apId,
+            tod: Date.now(),
+            priority: -1,
+            type: "MT_RECOVERY_RJT",
+            error: "Invalid recovery credentials.",
+            attemptsRemaining: attemptResult.attemptsRemaining
+          });
         }
       }
       
-      const token = createToken(user.username, publicKeyForToken);
-      
-      await AppDataSource.manager.update(
-        User,
-        { username: user.username },
-        { recoveryKeyUpdatedAt: new Date() }
-      );
-      
-      const response = {
-        id: apId,
-        tod: Date.now(),
-        priority: -1,
-        type: "MT_RECOVERY_ACK",
-        adminPubKey: getAdminPublicKey().toString(),
-        token
-      };
-      
-      return res.status(200).json(response);
-      
     } catch (error) {
+      await queryRunner.rollbackTransaction();
       return res.status(500).json({
         id: apId,
         tod: Date.now(),
@@ -160,7 +210,97 @@ class RecoveryController {
         type: "MT_RECOVERY_RJT",
         error: "Internal server error during local recovery."
       });
+    } finally {
+      await queryRunner.release();
     }
+  }
+
+  // Check if a user account is currently locked
+  async checkLockStatus(user) {
+    if (!user.recoveryLockedAt) {
+      return { isLocked: false };
+    }
+
+    const lockTime = new Date(user.recoveryLockedAt);
+    const unlockTime = new Date(lockTime.getTime() + LOCKOUT_DURATION);
+    const now = new Date();
+
+    if (now < unlockTime) {
+      // Still locked
+      return {
+        isLocked: true,
+        unlockTime: unlockTime.toISOString()
+      };
+    } else {
+      // Lock has expired, clean it up
+      await AppDataSource.manager.update(
+        User,
+        { username: user.username },
+        {
+          recoveryLockedAt: null,
+          recoveryAttempts: 0
+        }
+      );
+      
+      return { isLocked: false };
+    }
+  }
+
+  // Record a failed recovery attempt and check if we should lock
+  async recordFailedAttempt(queryRunner, user) {
+    const currentAttempts = user.recoveryAttempts || 0;
+    const newAttemptCount = currentAttempts + 1;
+    const now = new Date();
+    
+    // Check if this attempt should trigger a lock
+    if (newAttemptCount >= MAX_RECOVERY_ATTEMPTS) {
+      // LOCK the account
+      await queryRunner.manager.update(
+        User,
+        { username: user.username },
+        {
+          recoveryAttempts: newAttemptCount,
+          recoveryLockedAt: now,
+          lastRecoveryAttempt: now
+        }
+      );
+      
+      const lockUntil = new Date(now.getTime() + LOCKOUT_DURATION);
+      
+      return {
+        isLocked: true,
+        lockUntil: lockUntil.toISOString(),
+        attemptsRemaining: 0
+      };
+    } else {
+      // Just increment the attempt counter
+      await queryRunner.manager.update(
+        User,
+        { username: user.username },
+        {
+          recoveryAttempts: newAttemptCount,
+          lastRecoveryAttempt: now
+        }
+      );
+      
+      return {
+        isLocked: false,
+        attemptsRemaining: MAX_RECOVERY_ATTEMPTS - newAttemptCount
+      };
+    }
+  }
+
+  // Reset attempt counter after successful recovery
+  async resetAttempts(queryRunner, user) {
+    await queryRunner.manager.update(
+      User,
+      { username: user.username },
+      {
+        recoveryAttempts: 0,
+        recoveryLockedAt: null,
+        lastRecoveryAttempt: new Date()
+      }
+    );
   }
 
   async initiateCrossAPRecovery(req, res, username, sourceApId, recoveryHash) {
@@ -306,7 +446,7 @@ class RecoveryController {
         
         try {
           const expiresAtValue = request.expiresAt;
-          // @ts-ignore
+          //@ts-ignore
           expiresAt = new Date(request.expiresAt);
           if (isNaN(expiresAt.getTime())) {
             expiresAt = new Date(0);

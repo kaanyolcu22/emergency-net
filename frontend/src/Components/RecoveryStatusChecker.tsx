@@ -61,8 +61,8 @@ function RecoveryStatusChecker() {
       
       if (response.token) {
         toast({
-          title: "Success!",
-          description: "Your identity has been recovered. You'll be switched to your original account."
+          title: "Başarılı!",
+          description: "Kimlğiniz kurtarıldı! Orijinal kimliğinize geçiş yapılıyor...",
         });
 
         setCookie("token", response.token, {
