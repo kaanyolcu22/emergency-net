@@ -1,4 +1,5 @@
-// src/routes/protectedRoutes.js - Updated with unified recovery endpoints
+// src/routes/protectedRoutes.js - Updated with cross-AP recovery endpoints
+
 import express from 'express';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { messageController } from '../controller/MessageController.js';
@@ -11,6 +12,10 @@ import { recoveryController } from "../controller/RecoveryController.js";
 const protectedRouter = express.Router();
 protectedRouter.use(authMiddleware);
 
+// ============================================================================
+// EXISTING ROUTES
+// ============================================================================
+
 protectedRouter.get("/hello", helloController.hello.bind(helloController));
 protectedRouter.post("/message", messageController.receiveMessage.bind(messageController));
 protectedRouter.post("/sync", (req, res, next) => syncController.sync(req, res, next));
@@ -19,9 +24,18 @@ protectedRouter.delete("/channel", channelController.destroyChannel.bind(channel
 protectedRouter.post("/request-to-certify", certifyController.requestToCertify.bind(certifyController));
 protectedRouter.post("/certify", certifyController.certify.bind(certifyController));
 
-// Unified Recovery Routes
-protectedRouter.post("/check-cross-ap-recovery-status", recoveryController.checkCrossAPRecoveryStatus.bind(recoveryController));
-protectedRouter.post("/get-recovery-response", recoveryController.getRecoveryResponse.bind(recoveryController));
-protectedRouter.post("/cross-ap-recovery-sync", recoveryController.processCrossAPRecoverySync.bind(recoveryController));
+protectedRouter.post("/submit-cross-ap-request", 
+  recoveryController.submitCrossAPRequest.bind(recoveryController)
+);
+protectedRouter.post("/check-cross-ap-recovery-status", 
+  recoveryController.checkCrossAPRecoveryStatus.bind(recoveryController)
+);
+
+protectedRouter.post("/get-cross-ap-recovery-response", 
+  recoveryController.getCrossAPRecoveryResponse.bind(recoveryController)
+);
+protectedRouter.post("/cross-ap-recovery-sync", 
+  recoveryController.processCrossAPRecoverySync.bind(recoveryController)
+);
 
 export default protectedRouter;

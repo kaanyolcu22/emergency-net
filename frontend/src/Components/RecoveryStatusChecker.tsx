@@ -57,7 +57,7 @@ function RecoveryStatusChecker() {
     setIsSubmitting(true);
     
     try {
-      const response = await completeRecovery(requestId, words.join(" "));
+      const response = await completeRecovery(requestId);
       
       if (response.token) {
         toast({

@@ -1,4 +1,4 @@
-// src/controllers/RegisterController.js
+// src/controllers/RegisterController.js - Updated with simple hash
 import { apId } from "../../bin/www.js";
 import { User } from "../database/entity/User.js";
 import { AppDataSource } from "../database/newDbSetup.js";
@@ -7,8 +7,9 @@ import "../util/RegisterUtils.js";
 import { createToken, generatePUCert } from "../util/RegisterUtils.js";
 import { getAdminPublicKey } from "../scripts/readkeys.js";
 import { useOneTimePassword } from "../util/PasswordUtil.js";
-import { generateRecoveryWords, hashRecoveryPhrase } from "../util/RecoveryUtil.js";
+import { generateRecoveryWords } from "../util/RecoveryUtil.js";
 import { signByAdmin } from "../util/CryptoUtil.js";
+import crypto from "crypto";
 
 export class RegisterController {
   async register(req, res) {
@@ -30,26 +31,28 @@ export class RegisterController {
     const otp = req.body.password;
     
     try {
+      // Generate recovery words
       const recoveryWords = generateRecoveryWords();
       const recoveryPhrase = recoveryWords.join(" ");
       
-      const { hash: recoveryKeyHash, salt: recoveryKeySalt } = await hashRecoveryPhrase(recoveryPhrase);
-
+      // Simple hash without salt for consistency with recovery verification
+      const recoveryKeyHash = crypto.createHash('sha256').update(recoveryPhrase).digest('hex');
+      
+      console.log("Recovery hash created:", recoveryKeyHash.substring(0, 20) + "...");
 
       const recoveryData = {
         username,
         recoveryKeyHash,
-        recoveryKeySalt,
+        recoveryKeySalt: null, // No salt needed for simple hash
         recoveryKeyUpdatedAt: new Date()
       };
-      
 
       const recoverySignature = signByAdmin(JSON.stringify(recoveryData));
 
       await AppDataSource.manager.save(User, { 
         username,
         recoveryKeyHash,
-        recoveryKeySalt,
+        recoveryKeySalt: null, // No salt stored
         recoveryKeyUpdatedAt: new Date(),
         recoverySignature: recoverySignature,
         recoverySource: apId

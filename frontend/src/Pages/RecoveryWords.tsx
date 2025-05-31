@@ -5,15 +5,22 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useToast } from "@/Components/ui/use-toast";
 import { Copy, CheckCircle2, AlertTriangle, RefreshCw } from "lucide-react";
 
+interface LocationState {
+  recoveryWords?: string[];
+  isAfterRecovery?: boolean;
+}
+
 function RecoveryWords() {
   const location = useLocation();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [copied, setCopied] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [confirmed, setConfirmed] = useState<boolean>(false);
   
-  const recoveryWords = location.state?.recoveryWords || [];
-  const isAfterRecovery = location.state?.isAfterRecovery || false;
+  // Type the location state properly
+  const locationState = location.state as LocationState | null;
+  const recoveryWords: string[] = locationState?.recoveryWords || [];
+  const isAfterRecovery: boolean = locationState?.isAfterRecovery || false;
   
   useEffect(() => {
     if (!recoveryWords || recoveryWords.length === 0) {
@@ -21,7 +28,7 @@ function RecoveryWords() {
     }
   }, [recoveryWords, navigate]);
   
-  const copyToClipboard = () => {
+  const copyToClipboard = (): void => {
     navigator.clipboard.writeText(recoveryWords.join(" "));
     setCopied(true);
     toast({
@@ -32,7 +39,7 @@ function RecoveryWords() {
     setTimeout(() => setCopied(false), 2000);
   };
   
-  const continueToHome = () => {
+  const continueToHome = (): void => {
     if (confirmed) {
       navigate("/home");
     } else {
@@ -61,9 +68,9 @@ function RecoveryWords() {
         <CardContent className="flex-col flex gap-6">
           <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded-md">
             <div className="grid grid-cols-2 gap-2">
-              {recoveryWords.map((word, index) => (
+              {recoveryWords.map((word: string, index: number) => (
                 <div key={index} className="flex items-center gap-2">
-                  <span className="text-gray-500 w-6 text-right">{index+1}.</span>
+                  <span className="text-gray-500 w-6 text-right">{index + 1}.</span>
                   <span className="font-mono font-medium">{word}</span>
                 </div>
               ))}

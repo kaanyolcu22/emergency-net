@@ -1,40 +1,24 @@
-// src/controllers/RecoveryController.js - With extensive debugging
 import { apId } from "../../bin/www.js";
 import { User } from "../database/entity/User.js";
 import { AppDataSource } from "../database/newDbSetup.js";
-import { 
-  verifyRecoveryPhrase, 
-  deriveKeyFromRecoveryPhrase, 
-  generateKeyPairFromSeed,
-  hashRecoveryPhrase,
-  generateRecoveryWords
-} from "../util/RecoveryUtil.js";
 import { createToken } from "../util/RegisterUtils.js";
 import { checkTod } from "../util/Util.js";
-import { getAdminPublicKey, getPublicKey, getPrivateKey } from "../scripts/readkeys.js";
+import { getAdminPublicKey } from "../scripts/readkeys.js";
 import { 
+  processClientCrossAPRequest,
   processIncomingCrossAPRequests,
   processIncomingCrossAPResponses,
   cleanupExpiredRequests,
-  createCrossAPResponse,
-  decryptRecoveryRequestData
+  getPendingCrossAPRequests,
+  getCrossAPResponses
 } from "../util/CrossApRecoveryUtil.js";
 import { CrossAPRecoveryRequest } from "../database/entity/CrossApRecoveryRequest.js";
 import { CrossAPRecoveryResponse } from "../database/entity/CrossApRecoveryResponse.js";
-import crypto from 'crypto';
+import crypto from "crypto";
 
 class RecoveryController {
 
-  // Unified recovery - handles local and cross-AP automatically
   async recoverIdentity(req, res) {
-    console.log("\n=== RECOVERY DEBUG START ===");
-    console.log("Request body keys:", Object.keys(req.body));
-    console.log("Username:", req.body.username);
-    console.log("AP Identifier:", req.body.apIdentifier);
-    console.log("Has recovery words:", !!req.body.recoveryWords);
-    console.log("Has new public key:", !!req.body.newPublicKey);
-    console.log("Current AP ID:", apId);
-    
     const tod_received = req.body.tod;
     if (!checkTod(tod_received)) {
       return res.status(408).json({
@@ -46,10 +30,9 @@ class RecoveryController {
       });
     }
 
-    const { username, apIdentifier, recoveryWords, newPublicKey } = req.body;
+    const { username, apIdentifier, recoveryHash, newPublicKey } = req.body;
 
-    if (!username || !apIdentifier || !recoveryWords) {
-      console.log("❌ Missing required fields");
+    if (!username || !apIdentifier || !recoveryHash) {
       return res.status(400).json({
         id: apId,
         tod: Date.now(),
@@ -60,22 +43,12 @@ class RecoveryController {
     }
 
     try {
-      // Check if this is local recovery (same AP)
       if (apIdentifier === apId) {
-        console.log("✅ Local recovery detected");
-        return await this.handleLocalRecovery(req, res, username, apIdentifier, recoveryWords, newPublicKey);
+        return await this.handleLocalRecovery(req, res, username, apIdentifier, recoveryHash, newPublicKey);
       } else {
-        console.log("❌ Cross-AP recovery needed");
-        return res.status(400).json({
-          id: apId,
-          tod: Date.now(),
-          priority: -1,
-          type: "MT_RECOVERY_RJT",
-          error: "User not registered at this AP. Use cross-AP recovery."
-        });
+        return await this.initiateCrossAPRecovery(req, res, username, apIdentifier, recoveryHash);
       }
     } catch (error) {
-      console.error("❌ Recovery error:", error);
       return res.status(500).json({
         id: apId,
         tod: Date.now(),
@@ -83,32 +56,24 @@ class RecoveryController {
         type: "MT_RECOVERY_RJT",
         error: "Internal server error during recovery."
       });
-    } finally {
-      console.log("=== RECOVERY DEBUG END ===\n");
     }
   }
 
-  // Handle local recovery with extensive debugging
-  async handleLocalRecovery(req, res, username, apIdentifier, recoveryWords, newPublicKey) {
+  async handleLocalRecovery(req, res, username, apIdentifier, recoveryHash, newPublicKey) {
     try {
-      console.log("\n--- LOCAL RECOVERY DEBUG ---");
-      
       const fullUsername = `${username}@${apIdentifier}`;
-      console.log("Looking for user:", fullUsername);
       
       let user = await AppDataSource.manager.findOneBy(User, { 
         username: fullUsername 
       });
       
       if (!user) {
-        console.log("Full username not found, trying short username:", username);
         user = await AppDataSource.manager.findOneBy(User, {
           username: username
         });
       }
       
       if (!user) {
-        console.log("❌ User not found in database");
         return res.status(404).json({
           id: apId,
           tod: Date.now(),
@@ -118,12 +83,7 @@ class RecoveryController {
         });
       }
       
-      console.log("✅ User found:", user.username);
-      console.log("Has recovery hash:", !!user.recoveryKeyHash);
-      console.log("Has recovery salt:", !!user.recoveryKeySalt);
-      
-      if (!user.recoveryKeyHash || !user.recoveryKeySalt) {
-        console.log("❌ No recovery data for user");
+      if (!user.recoveryKeyHash) {
         return res.status(400).json({
           id: apId,
           tod: Date.now(),
@@ -133,100 +93,53 @@ class RecoveryController {
         });
       }
       
-      console.log("🔍 Verifying recovery phrase...");
-      console.log("Recovery words length:", recoveryWords.length);
-      console.log("Stored hash preview:", user.recoveryKeyHash.substring(0, 20) + "...");
-      console.log("Stored salt preview:", user.recoveryKeySalt.substring(0, 20) + "...");
+      const hashVariations = [recoveryHash];
       
-      const isValid = await verifyRecoveryPhrase(
-        recoveryWords,
-        user.recoveryKeyHash,
-        user.recoveryKeySalt
-      );
+      const possibleWords = [
+        "normalized single space version",
+        "double  space version", 
+        "triple   space version"
+      ];
+
+      for (const words of possibleWords) {
+        try {
+          const testHash = crypto.createHash('sha256').update(words).digest('hex');
+          hashVariations.push(testHash);
+        } catch (e) {
+          // Silent fail
+        }
+      }
       
-      console.log("Recovery phrase valid:", isValid);
+      const isValid = hashVariations.includes(user.recoveryKeyHash);
       
       if (!isValid) {
-        console.log("❌ Invalid recovery phrase");
         return res.status(401).json({
           id: apId,
           tod: Date.now(),
           priority: -1,
           type: "MT_RECOVERY_RJT",
-          error: "Invalid recovery phrase."
+          error: "Invalid recovery credentials."
         });
       }
       
-      console.log("✅ Recovery phrase verified");
-      console.log("🔑 Processing public key for token...");
-      
-      // Use client's public key if provided, otherwise generate server-side
       let publicKeyForToken;
       
       if (newPublicKey) {
-        console.log("📤 Using client's public key");
-        console.log("Client public key type:", typeof newPublicKey);
-        console.log("Client public key keys:", Object.keys(newPublicKey));
-        console.log("Key type (kty):", newPublicKey.kty);
-        console.log("Algorithm:", newPublicKey.alg);
-        console.log("Modulus length:", newPublicKey.n ? newPublicKey.n.length : "none");
-        
         try {
-          // Convert JWK to PEM format for token
           const clientPubKeyPem = await this.jwkToPem(newPublicKey);
-          console.log("✅ JWK to PEM conversion successful");
-          console.log("PEM preview:", clientPubKeyPem.substring(0, 100) + "...");
           publicKeyForToken = Buffer.from(clientPubKeyPem, 'utf8');
-          console.log("Public key buffer length:", publicKeyForToken.length);
         } catch (jwkError) {
-          console.error("❌ JWK to PEM conversion failed:", jwkError);
           throw jwkError;
         }
-      } else {
-        console.log("🔧 Generating server-side keys");
-        const keyMaterial = await deriveKeyFromRecoveryPhrase(recoveryWords);
-        const keyPair = generateKeyPairFromSeed(keyMaterial);
-        publicKeyForToken = Buffer.from(keyPair.publicKey, 'utf8');
-        console.log("Server-generated key buffer length:", publicKeyForToken.length);
       }
       
-      console.log("🎫 Creating token...");
-      console.log("Token username:", user.username);
-      console.log("Token public key buffer length:", publicKeyForToken.length);
-      
-      // Create token with the public key
       const token = createToken(user.username, publicKeyForToken);
       
-      console.log("✅ Token created successfully");
-      console.log("Token length:", token.length);
-      console.log("Token parts:", token.split('.').length);
-      console.log("Token preview:", token.substring(0, 100) + "...");
-      
-      // Parse token to verify content
-      try {
-        const tokenParts = token.split('.');
-        const tokenData = JSON.parse(Buffer.from(tokenParts[0], 'base64').toString());
-        console.log("Token data preview:", {
-          mtUsername: tokenData.mtUsername,
-          apReg: tokenData.apReg,
-          todReg: tokenData.todReg,
-          hasPubKey: !!tokenData.mtPubKey,
-          pubKeyPreview: tokenData.mtPubKey ? tokenData.mtPubKey.substring(0, 50) + "..." : "none"
-        });
-      } catch (parseError) {
-        console.error("❌ Token parsing error:", parseError);
-      }
-      
-      console.log("💾 Updating user recovery timestamp...");
-      
-      // Update user's recovery timestamp
       await AppDataSource.manager.update(
         User,
         { username: user.username },
         { recoveryKeyUpdatedAt: new Date() }
       );
-      
-      console.log("✅ User updated successfully");
       
       const response = {
         id: apId,
@@ -237,43 +150,301 @@ class RecoveryController {
         token
       };
       
-      console.log("📤 Sending response:", {
-        type: response.type,
-        hasToken: !!response.token,
-        hasAdminKey: !!response.adminPubKey
-      });
-      
       return res.status(200).json(response);
       
     } catch (error) {
-      console.error("❌ Local recovery error:", error);
-      console.error("Error stack:", error.stack);
       return res.status(500).json({
         id: apId,
         tod: Date.now(),
         priority: -1,
         type: "MT_RECOVERY_RJT",
-        error: "Internal server error during local recovery: " + error.message
+        error: "Internal server error during local recovery."
       });
     }
   }
 
-  // Helper function to convert JWK to PEM format with debugging
-  async jwkToPem(jwk) {
+  async initiateCrossAPRecovery(req, res, username, sourceApId, recoveryHash) {
     try {
-      console.log("🔧 Converting JWK to PEM...");
-      console.log("JWK input:", {
-        kty: jwk.kty,
-        use: jwk.use,
-        alg: jwk.alg,
-        hasN: !!jwk.n,
-        hasE: !!jwk.e,
-        nLength: jwk.n ? jwk.n.length : 0,
-        eLength: jwk.e ? jwk.e.length : 0
+      const tempUserId = `temp_${username}_${sourceApId}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const tempUsername = `temp_${username}_${Date.now().toString().slice(-6)}`;
+      
+      const { privateKey: tempPrivKey, publicKey: tempPubKey } = crypto.generateKeyPairSync("rsa", {
+        modulusLength: 2048,
       });
       
-      // Import JWK as CryptoKey
-      console.log("📥 Importing JWK as CryptoKey...");
+      const publicKeyBuffer = Buffer.from(tempPubKey.export({ format: "pem", type: "spki" }));
+      const tempToken = createToken(tempUsername, publicKeyBuffer);
+      
+      const crossAPRequestInfo = {
+        tempUserId,
+        requestingApId: apId,
+        destinationApId: sourceApId,
+        hash: recoveryHash,
+        realUserId: username,
+        sourceApId: sourceApId,
+        ephemeralPublicKey: "",
+        timestamp: Date.now(),
+        status: "INITIATED",
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+      };
+      
+      return res.status(200).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_RECOVERY_CROSS_AP_INITIATED",
+        tempUserId,
+        tempUsername,
+        tempToken,
+        originalUsername: `${username}@${sourceApId}`,
+        message: "Cross-AP recovery initiated. You can use the system with temporary identity while recovery is processed."
+      });
+      
+    } catch (error) {
+      return res.status(500).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_RECOVERY_RJT",
+        error: "Failed to initiate cross-AP recovery."
+      });
+    }
+  }
+
+  async submitCrossAPRequest(req, res) {
+    const tod_received = req.body.tod;
+    if (!checkTod(tod_received)) {
+      return res.status(408).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RJT",
+        error: "Timeout error."
+      });
+    }
+
+    const { encryptedData, tempUserId } = req.body;
+
+    if (!encryptedData || !tempUserId) {
+      return res.status(400).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RJT",
+        error: "Missing encrypted data or temp user ID."
+      });
+    }
+
+    try {
+      const result = await processClientCrossAPRequest(encryptedData);
+      
+      if (result.success) {
+        return res.status(200).json({
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_CROSS_AP_ACK",
+          tempUserId: result.tempUserId,
+          message: result.message
+        });
+      } else {
+        return res.status(400).json({
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_CROSS_AP_RJT",
+          error: "Failed to process cross-AP request."
+        });
+      }
+      
+    } catch (error) {
+      return res.status(500).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RJT",
+        error: "Internal server error processing cross-AP request."
+      });
+    }
+  }
+
+  async checkCrossAPRecoveryStatus(req, res) {
+    const { tempUserId } = req.body;
+
+    if (!tempUserId) {
+      return res.status(400).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_STATUS_RJT",
+        error: "Missing temp user ID."
+      });
+    }
+
+    try {
+      const response = await AppDataSource.manager.findOneBy(CrossAPRecoveryResponse, {
+        tempUserId
+      });
+
+      const request = await AppDataSource.manager.findOneBy(CrossAPRecoveryRequest, {
+        tempUserId
+      });
+
+      if (response) {
+        return res.status(200).json({
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_CROSS_AP_STATUS_ACK",
+          status: "completed",
+          hasResponse: true,
+          message: "Recovery response is ready."
+        });
+      } else if (request) {
+        const now = new Date();
+        let expiresAt;
+        
+        try {
+          const expiresAtValue = request.expiresAt;
+          // @ts-ignore
+          expiresAt = new Date(request.expiresAt);
+          if (isNaN(expiresAt.getTime())) {
+            expiresAt = new Date(0);
+          }
+        } catch (e) {
+          expiresAt = new Date(0);
+        }
+        
+        if (expiresAt < now) {
+          return res.status(200).json({
+            id: apId,
+            tod: Date.now(),
+            priority: -1,
+            type: "MT_CROSS_AP_STATUS_ACK",
+            status: "expired",
+            hasResponse: false,
+            message: "Recovery request has expired."
+          });
+        } else {
+          return res.status(200).json({
+            id: apId,
+            tod: Date.now(),
+            priority: -1,
+            type: "MT_CROSS_AP_STATUS_ACK",
+            status: "pending",
+            hasResponse: false,
+            message: "Recovery request is still being processed."
+          });
+        }
+      } else {
+        return res.status(404).json({
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_CROSS_AP_STATUS_RJT",
+          error: "Recovery request not found."
+        });
+      }
+
+    } catch (error) {
+      return res.status(500).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_STATUS_RJT",
+        error: "Internal server error."
+      });
+    }
+  }
+
+  async getCrossAPRecoveryResponse(req, res) {
+    const { tempUserId } = req.body;
+
+    if (!tempUserId) {
+      return res.status(400).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RESPONSE_RJT",
+        error: "Missing temp user ID."
+      });
+    }
+
+    try {
+      const response = await AppDataSource.manager.findOneBy(CrossAPRecoveryResponse, {
+        tempUserId
+      });
+
+      if (!response) {
+        return res.status(404).json({
+          id: apId,
+          tod: Date.now(),
+          priority: -1,
+          type: "MT_CROSS_AP_RESPONSE_RJT",
+          error: "Recovery response not found."
+        });
+      }
+
+      return res.status(200).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RESPONSE_ACK",
+        encryptedTokenData: response.encryptedTokenData,
+        sourceApId: response.sourceApId,
+        signature: response.signature
+      });
+
+    } catch (error) {
+      return res.status(500).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_RESPONSE_RJT",
+        error: "Internal server error."
+      });
+    }
+  }
+
+  async processCrossAPRecoverySync(req, res) {
+    try {
+      const { crossAPRequests = [], crossAPResponses = [] } = req.body;
+
+      await cleanupExpiredRequests();
+
+      if (crossAPRequests.length > 0) {
+        await processIncomingCrossAPRequests(crossAPRequests);
+      }
+
+      if (crossAPResponses.length > 0) {
+        await processIncomingCrossAPResponses(crossAPResponses);
+      }
+
+      const pendingRequests = await getPendingCrossAPRequests();
+      const pendingResponses = await getCrossAPResponses();
+
+      return res.status(200).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_SYNC_ACK",
+        pendingRequests,
+        pendingResponses
+      });
+
+    } catch (error) {
+      return res.status(500).json({
+        id: apId,
+        tod: Date.now(),
+        priority: -1,
+        type: "MT_CROSS_AP_SYNC_RJT",
+        error: "Internal server error during cross-AP sync."
+      });
+    }
+  }
+
+  async jwkToPem(jwk) {
+    try {
       const cryptoKey = await crypto.webcrypto.subtle.importKey(
         'jwk',
         jwk,
@@ -285,66 +456,20 @@ class RecoveryController {
         ['verify']
       );
       
-      console.log("✅ JWK imported as CryptoKey");
-      
-      // Export as SPKI (PEM format)
-      console.log("📤 Exporting as SPKI...");
       const spki = await crypto.webcrypto.subtle.exportKey('spki', cryptoKey);
-      
-      console.log("✅ SPKI exported, length:", spki.byteLength);
-      
       const base64 = Buffer.from(spki).toString('base64');
-      console.log("Base64 length:", base64.length);
-      
       const lines = base64.match(/.{1,64}/g);
-      console.log("Base64 lines:", lines ? lines.length : 0);
+      
+      if (!lines) {
+        throw new Error("Failed to format public key");
+      }
       
       const pem = `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----`;
-      console.log("✅ PEM generated, length:", pem.length);
       
       return pem;
     } catch (error) {
-      console.error("❌ JWK to PEM conversion failed:", error);
-      console.error("Error details:", {
-        name: error.name,
-        message: error.message,
-        stack: error.stack
-      });
       throw new Error("Invalid public key format: " + error.message);
     }
-  }
-
-  // Rest of methods with minimal changes...
-  createTemporaryToken(tokenData) {
-    const encodedData = Buffer.from(JSON.stringify(tokenData)).toString('base64');
-    const tempSignature = "temp_signature_" + Date.now();
-    const tempCert = "temp_cert";
-    return `${encodedData}.${tempSignature}.${tempCert}`;
-  }
-
-  async initiateCrossAPRecoveryWithTempIdentity(req, res) {
-    // Implementation remains the same
-    return res.status(500).json({
-      error: "Cross-AP recovery not implemented in debug version"
-    });
-  }
-
-  async checkCrossAPRecoveryStatus(req, res) {
-    return res.status(500).json({
-      error: "Cross-AP recovery status not implemented in debug version"
-    });
-  }
-
-  async getRecoveryResponse(req, res) {
-    return res.status(500).json({
-      error: "Get recovery response not implemented in debug version"
-    });
-  }
-
-  async processCrossAPRecoverySync(req, res) {
-    return res.status(500).json({
-      error: "Cross-AP recovery sync not implemented in debug version"
-    });
   }
 }
 

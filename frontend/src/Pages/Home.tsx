@@ -97,11 +97,11 @@ function Home() {
 
         <div className="w-full flex items-center justify-start gap-2">
           <AreYouSureDialog
-            title="Are you sure you want to logout? (Cannot be undone)"
+            title="Çıkmak istediğinize emin misiniz?"
             onAccept={logout}
           >
             <Button className="!bg-red-500 w-min text-xs">
-              Logout
+              Çıkış Yap
             </Button>
           </AreYouSureDialog>
           <span className="text-sm">{usernick}</span>
@@ -128,7 +128,7 @@ function Home() {
         )}
 
         <Card className="p-4 flex gap-4">
-          <MessagesSquare /> Channels
+          <MessagesSquare /> Kanallar
         </Card>
 
         {isPU && !isTemporary && (

@@ -84,7 +84,6 @@ function Recovery() {
           await handleSuccessfulRecovery(data.token!);
           
         } else if (data.type === 'cross_ap_initiated') {
-          // CROSS-AP RECOVERY - immediate access with temporary identity
           console.log("✅ Cross-AP recovery initiated - redirecting to home with temp identity");
           
           toast({
@@ -92,7 +91,6 @@ function Recovery() {
             description: `You can now use the system with temporary identity while your original identity is being recovered.`
           });
           
-          // Set temporary token for immediate access
           if (data.tempToken) {
             setCookie("token", data.tempToken, {
               sameSite: "Lax",
@@ -106,7 +104,6 @@ function Recovery() {
             localStorage.setItem("is_temporary_identity", "true");
           }
           
-          // Redirect immediately to home - no waiting screen!
           navigate("/home");
         }
       },
@@ -178,7 +175,6 @@ function Recovery() {
     
     const [username, apIdentifier] = combinedUsername.split('@');
     
-    // Start recovery process - will redirect immediately based on type
     recover({
       username,
       apIdentifier,
@@ -222,10 +218,10 @@ function Recovery() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <KeyRound size={20} />
-                Identity Recovery
+                Kimliğini Kurtar
               </CardTitle>
               <CardDescription>
-                Recover your identity with recovery words
+                Hesabınızı kurtarmak için kullanıcı adınızı ve kurtarma kelimelerinizi girin.
               </CardDescription>
             </div>
           </div>
@@ -234,7 +230,7 @@ function Recovery() {
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
               <div className="flex justify-between items-center">
-                <label className="text-sm font-medium">Username</label>
+                <label className="text-sm font-medium">Kullanıcı adı</label>
                 <Button 
                   type="button" 
                   variant="ghost" 
@@ -255,12 +251,12 @@ function Recovery() {
                 disabled={isRecovering}
               />
               <p className="text-xs text-gray-500 mt-1">
-                Enter your username and the AP where you registered (user@AP format).
+                Kullanıcı adınızı ve hangi APde kayıt yaptığınızı user@AP formatında belirtiniz.
               </p>
             </div>
             
             <div>
-              <label className="text-sm font-medium">Recovery Words</label>
+              <label className="text-sm font-medium">Kurtarma Kelimeleri</label>
               <div className="grid grid-cols-2 gap-2 mt-1">
                 {words.map((word, index) => (
                   <div key={index} className="flex items-center gap-1">
@@ -268,7 +264,7 @@ function Recovery() {
                     <Input
                       value={word}
                       onChange={(e) => handleWordChange(index, e.target.value)}
-                      placeholder={`${index+1}. word`}
+                      placeholder={`${index+1}. kelime`}
                       className="text-sm"
                       disabled={isRecovering}
                     />
@@ -285,9 +281,9 @@ function Recovery() {
               {isRecovering ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Recovering...
+                  Hesap Kurtarılıyor...
                 </>
-              ) : "Recover Identity"}
+              ) : "Kimliği Kurtar"}
             </Button>
           </form>
         </CardContent>

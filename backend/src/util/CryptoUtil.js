@@ -1,5 +1,4 @@
 import crypto, { createHash } from "crypto";
-import { webcrypto } from 'crypto';
 import {
   getAdminPublicKey,
   getAdminPrivateKey,

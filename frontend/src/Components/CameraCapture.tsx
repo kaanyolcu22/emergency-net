@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from "@/Components/ui/button";
 import { compressImageForEmergencyNetwork } from "@/Services/message";
-import { CameraCaptureProps } from '@/types';
+import { CameraCaptureProps } from '@/types/types';
 
 function CameraCapture({ onImageCaptured, onCancel }: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);

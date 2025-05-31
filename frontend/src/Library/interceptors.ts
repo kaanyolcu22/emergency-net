@@ -3,8 +3,7 @@
 
 import { APDataReference } from "./APData";
 import { sign, verify } from "./crypt";
-import { readPrivateKey, readPublicKey } from "./keys";
-import { keyToJwk } from "./crypt";
+import { readPrivateKey} from "./keys";
 import { getCookie } from "typescript-cookie";
 
 export async function APResponseVerifier({
@@ -65,7 +64,7 @@ export async function MTResponseSigner(content: Record<string, any>) {
             console.log("⚠️ Token missing public key - proceeding anyway");
           }
         }
-      } catch (tokenError) {
+      } catch (tokenError : any) {
         console.log("⚠️ Token parsing failed, but continuing:", tokenError.message);
       }
     }
@@ -86,7 +85,7 @@ export async function MTResponseSigner(content: Record<string, any>) {
     console.log("=== End MTResponseSigner Debug ===");
     return result;
     
-  } catch (error) {
+  } catch (error: any) {
     console.error("❌ Signing failed:", error);
     
     // Provide helpful error messages

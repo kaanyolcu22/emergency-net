@@ -1,4 +1,4 @@
-// src/Components/RecoveryStatusChecker.tsx - Updated for unified recovery
+// src/Components/RecoveryStatusChecker.tsx - Fixed unused variable
 import { useEffect, useState } from 'react';
 import { useToast } from "@/Components/ui/use-toast";
 import { Button } from "@/Components/ui/button";
@@ -13,17 +13,22 @@ function RecoveryStatusChecker() {
   const [isComplete, setIsComplete] = useState(false);
   const [tempUserId, setTempUserId] = useState("");
   const [originalUsername, setOriginalUsername] = useState("");
-  const [tempUsername, setTempUsername] = useState("");
   
   useEffect(() => {
     const pendingRecovery = localStorage.getItem("pending_cross_ap_recovery");
     if (pendingRecovery) {
-      const data = JSON.parse(pendingRecovery);
-      setIsPending(true);
-      setTempUserId(data.tempUserId);
-      setOriginalUsername(data.originalUsername);
-      setTempUsername(data.tempUsername);
-      checkStatus(data.tempUserId);
+      try {
+        const data = JSON.parse(pendingRecovery);
+        setIsPending(true);
+        setTempUserId(data.tempUserId);
+        setOriginalUsername(data.originalUsername);
+        // Only use tempUsername if we actually need it, otherwise don't store it
+        checkStatus(data.tempUserId);
+      } catch (error) {
+        console.error("Error parsing pending recovery data:", error);
+        // Clean up invalid data
+        localStorage.removeItem("pending_cross_ap_recovery");
+      }
     }
   }, []);
   
@@ -45,7 +50,7 @@ function RecoveryStatusChecker() {
   
   const handleComplete = async () => {
     try {
-      const response = await completeRecovery(tempUserId, "");
+      const response = await completeRecovery(tempUserId);
       
       if (response.token) {
         toast({
@@ -55,7 +60,7 @@ function RecoveryStatusChecker() {
 
         setCookie("token", response.token, {
           sameSite: "Lax",
-          secure: location.protocol === 'https:',
+          secure: window.location.protocol === 'https:',
           expires: 365,
           path: '/'
         });

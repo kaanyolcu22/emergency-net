@@ -1,13 +1,45 @@
-// src/Library/recoveryUtil.ts - Fixed client-side cross-AP recovery
-
 import { arrayBufferToBase64, base64ToArrayBuffer } from "./util";
 
-/**
- * Generate ephemeral key pair (non-deterministic, temporary)
- */
-export async function generateEphemeralKeyPair() {
-  console.log("🔑 Generating ephemeral key pair...");
+interface EphemeralKeyPair {
+  publicKey: CryptoKey;
+  privateKey: CryptoKey;
+  publicKeyJwk: JsonWebKey;
+  privateKeyJwk: JsonWebKey;
+  publicKeyPem: string;
+}
+
+interface CrossAPRequest {
+  encryptedData: string;
+  ephemeralKeyPair: EphemeralKeyPair;
+}
+
+interface StoredKeyData {
+  publicKeyJwk: JsonWebKey;
+  privateKeyJwk: JsonWebKey;
+  publicKeyPem: string;
+  timestamp: number;
+}
+
+interface CertificateData {
+  apPub: string;
+  apId: string;
+}
+
+async function hashRecoveryWords(recoveryWords: string): Promise<string> {
+  const normalizedWords = Array.isArray(recoveryWords) 
+    ? recoveryWords.join(" ").trim().replace(/\s+/g, ' ')
+    : recoveryWords.trim().replace(/\s+/g, ' ');
   
+  const encoder = new TextEncoder();
+  const data = encoder.encode(normalizedWords);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export async function generateEphemeralKeyPair(): Promise<EphemeralKeyPair> {
   try {
     const keyPair = await window.crypto.subtle.generateKey(
       {
@@ -23,13 +55,16 @@ export async function generateEphemeralKeyPair() {
     const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
     const privateKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.privateKey);
     
-    // Convert public key to PEM format
     const publicKeySpki = await window.crypto.subtle.exportKey('spki', keyPair.publicKey);
     const publicKeyBase64 = arrayBufferToBase64(publicKeySpki);
     const publicKeyLines = publicKeyBase64.match(/.{1,64}/g);
+    
+    if (!publicKeyLines) {
+      throw new Error("Failed to format public key");
+    }
+    
     const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${publicKeyLines.join('\n')}\n-----END PUBLIC KEY-----`;
 
-    console.log("✅ Ephemeral key pair generated");
     return {
       publicKey: keyPair.publicKey,
       privateKey: keyPair.privateKey,
@@ -37,51 +72,21 @@ export async function generateEphemeralKeyPair() {
       privateKeyJwk,
       publicKeyPem
     };
-  } catch (error) {
-    console.error("❌ Ephemeral key generation failed:", error);
-    throw new Error(`Failed to generate ephemeral keys: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`Failed to generate ephemeral keys: ${errorMessage}`);
   }
 }
 
-/**
- * Hash recovery words client-side - simple hash without salt (same as local recovery)
- */
-export async function hashRecoveryWords(recoveryWordsString) {
-  console.log("🔐 Hashing recovery words...");
-  
+function extractPublicKeyFromCert(cert: string): string {
   try {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(recoveryWordsString);
-    
-    // Simple SHA-256 hash without salt (same as local recovery)
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    
-    const hash = Array.from(new Uint8Array(hashBuffer))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-    
-    console.log("✅ Recovery words hashed successfully");
-    return hash;
-  } catch (error) {
-    console.error("❌ Recovery word hashing failed:", error);
-    throw new Error(`Failed to hash recovery words: ${error.message}`);
-  }
-}
-
-/**
- * Extract public key from EmergencyNet certificate format
- */
-function extractPublicKeyFromCert(cert) {
-  try {
-    console.log("🔍 Extracting public key from certificate...");
-    
     const parts = cert.split('.');
     if (parts.length < 1) {
       throw new Error("Invalid certificate format");
     }
     
     const decoded = atob(parts[0]);
-    const certData = JSON.parse(decoded);
+    const certData: CertificateData = JSON.parse(decoded);
     
     const publicKey = certData.apPub;
     if (!publicKey) {
@@ -92,23 +97,16 @@ function extractPublicKeyFromCert(cert) {
       throw new Error("Invalid PEM format in certificate");
     }
     
-    console.log("✅ Public key extracted from certificate");
     return publicKey;
     
-  } catch (error) {
-    console.error("❌ Certificate parsing failed:", error);
-    throw new Error(`Failed to extract public key: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`Failed to extract public key: ${errorMessage}`);
   }
 }
 
-/**
- * Encrypt data with AP's public key
- */
-async function encryptWithAPPublicKey(data, apPublicKeyPem) {
+async function encryptWithAPPublicKey(data: string, apPublicKeyPem: string): Promise<string> {
   try {
-    console.log("🔐 Encrypting data with AP public key...");
-    
-    // Clean PEM string
     const pemHeader = "-----BEGIN PUBLIC KEY-----";
     const pemFooter = "-----END PUBLIC KEY-----";
     const pemContents = apPublicKeyPem.substring(
@@ -116,10 +114,8 @@ async function encryptWithAPPublicKey(data, apPublicKeyPem) {
       apPublicKeyPem.length - pemFooter.length
     ).replace(/\s/g, '');
     
-    // Convert to ArrayBuffer
     const binaryDer = base64ToArrayBuffer(pemContents);
     
-    // Import public key
     const publicKey = await window.crypto.subtle.importKey(
       'spki',
       binaryDer,
@@ -131,7 +127,6 @@ async function encryptWithAPPublicKey(data, apPublicKeyPem) {
       ['encrypt']
     );
     
-    // Encrypt data
     const encoder = new TextEncoder();
     const dataBuffer = encoder.encode(data);
     
@@ -141,38 +136,25 @@ async function encryptWithAPPublicKey(data, apPublicKeyPem) {
       dataBuffer
     );
     
-    console.log("✅ Data encrypted with AP public key");
     return arrayBufferToBase64(encrypted);
     
-  } catch (error) {
-    console.error("❌ Encryption with AP public key failed:", error);
-    throw new Error(`Encryption failed: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`Encryption failed: ${errorMessage}`);
   }
 }
 
-/**
- * Create cross-AP recovery request (Client → AP2)
- */
 export async function createCrossAPRecoveryRequest(
-  username,
-  sourceApId,
-  recoveryWords,
-  tempUserId,
-  currentApCertificate
-) {
+  username: string,
+  sourceApId: string,
+  recoveryWords: string,
+  tempUserId: string,
+  currentApCertificate: string
+): Promise<CrossAPRequest> {
   try {
-    console.log("🚀 Creating cross-AP recovery request...");
-    console.log("Username:", username);
-    console.log("Source AP ID:", sourceApId);
-    console.log("Temp User ID:", tempUserId);
-    
-    // Step 1: Generate ephemeral keys
     const ephemeralKeyPair = await generateEphemeralKeyPair();
-    
-    // Step 2: Hash recovery words (never send plaintext)
     const recoveryHash = await hashRecoveryWords(recoveryWords);
     
-    // Step 3: Create request payload
     const requestPayload = {
       tempUserId,
       realUserId: username,
@@ -183,41 +165,24 @@ export async function createCrossAPRecoveryRequest(
       type: "CROSS_AP_RECOVERY_REQUEST"
     };
     
-    console.log("📋 Request payload created:", {
-      tempUserId: requestPayload.tempUserId,
-      realUserId: requestPayload.realUserId,
-      sourceApId: requestPayload.sourceApId,
-      hasHash: !!requestPayload.recoveryHash,
-      hasEphemeralKey: !!requestPayload.ephemeralPublicKey
-    });
-    
-    // Step 4: Extract AP2's public key and encrypt
     const ap2PublicKey = extractPublicKeyFromCert(currentApCertificate);
     const encryptedPayload = await encryptWithAPPublicKey(
       JSON.stringify(requestPayload), 
       ap2PublicKey
     );
     
-    console.log("✅ Request encrypted with AP2's public key");
-    
     return {
       encryptedData: encryptedPayload,
       ephemeralKeyPair
     };
     
-  } catch (error) {
-    console.error("❌ Error creating cross-AP recovery request:", error);
-    throw error;
+  } catch (error: unknown) {
+    throw error instanceof Error ? error : new Error('Unknown error in createCrossAPRecoveryRequest');
   }
 }
 
-/**
- * Decrypt recovery response with ephemeral private key
- */
-export async function decryptRecoveryResponse(encryptedData, ephemeralPrivateKey) {
+export async function decryptRecoveryResponse(encryptedData: string, ephemeralPrivateKey: CryptoKey): Promise<any> {
   try {
-    console.log("🔓 Decrypting recovery response...");
-    
     const encryptedBuffer = base64ToArrayBuffer(encryptedData);
     
     const decrypted = await window.crypto.subtle.decrypt(
@@ -227,20 +192,15 @@ export async function decryptRecoveryResponse(encryptedData, ephemeralPrivateKey
     );
     
     const decryptedText = new TextDecoder().decode(decrypted);
-    console.log("✅ Recovery response decrypted successfully");
-    
     return JSON.parse(decryptedText);
-  } catch (error) {
-    console.error("❌ Decryption error:", error);
-    throw new Error(`Failed to decrypt recovery response: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`Failed to decrypt recovery response: ${errorMessage}`);
   }
 }
 
-/**
- * Store ephemeral keys temporarily
- */
-export function storeEphemeralKeys(tempUserId, keyPair) {
-  const keyData = {
+export function storeEphemeralKeys(tempUserId: string, keyPair: EphemeralKeyPair): void {
+  const keyData: StoredKeyData = {
     publicKeyJwk: keyPair.publicKeyJwk,
     privateKeyJwk: keyPair.privateKeyJwk,
     publicKeyPem: keyPair.publicKeyPem,
@@ -248,21 +208,16 @@ export function storeEphemeralKeys(tempUserId, keyPair) {
   };
   
   localStorage.setItem(`ephemeral_keys_${tempUserId}`, JSON.stringify(keyData));
-  console.log("💾 Ephemeral keys stored for:", tempUserId);
 }
 
-/**
- * Retrieve stored ephemeral keys
- */
-export async function retrieveEphemeralKeys(tempUserId) {
+export async function retrieveEphemeralKeys(tempUserId: string): Promise<EphemeralKeyPair | null> {
   try {
     const keyDataString = localStorage.getItem(`ephemeral_keys_${tempUserId}`);
     if (!keyDataString) {
-      console.log("❌ No ephemeral keys found for:", tempUserId);
       return null;
     }
     
-    const keyData = JSON.parse(keyDataString);
+    const keyData: StoredKeyData = JSON.parse(keyDataString);
     
     const publicKey = await window.crypto.subtle.importKey(
       'jwk',
@@ -286,7 +241,6 @@ export async function retrieveEphemeralKeys(tempUserId) {
       ['decrypt']
     );
     
-    console.log("✅ Ephemeral keys retrieved for:", tempUserId);
     return {
       publicKey,
       privateKey,
@@ -294,16 +248,11 @@ export async function retrieveEphemeralKeys(tempUserId) {
       privateKeyJwk: keyData.privateKeyJwk,
       publicKeyPem: keyData.publicKeyPem
     };
-  } catch (error) {
-    console.error("❌ Error retrieving ephemeral keys:", error);
+  } catch (error: unknown) {
     return null;
   }
 }
 
-/**
- * Clear ephemeral keys after use
- */
-export function clearEphemeralKeys(tempUserId) {
+export function clearEphemeralKeys(tempUserId: string): void {
   localStorage.removeItem(`ephemeral_keys_${tempUserId}`);
-  console.log("🗑️ Cleared ephemeral keys for:", tempUserId);
 }
