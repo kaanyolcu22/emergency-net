@@ -1,4 +1,3 @@
-// src/scripts/runMigrations.js
 import { AppDataSource } from "../database/newDbSetup.js";
 import { up } from "../database/migrations/createSyncedRecoveryData.js";
 

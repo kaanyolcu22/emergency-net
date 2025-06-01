@@ -1,4 +1,3 @@
-// src/middleware/authMiddleware.js - Updated to handle temporary tokens
 import {
   base64toJson,
   comparePEMStrings,
@@ -54,25 +53,21 @@ export const authMiddleware = async (req, res, next) => {
     
     console.log("🎫 Token found");
     
-    // Parse token data with better error handling
     let tokenData;
     try {
       tokenData = await getTokenData(token);
       console.log("📋 Token data extracted for user:", tokenData?.mtUsername);
       
-      // Check if this is a temporary token
       if (tokenData?.isTemporary) {
         console.log("🔄 Temporary token detected");
         auth.isTemporary = true;
         auth.tempUserId = tokenData.tempUserId;
         auth.originalUsername = tokenData.originalUsername;
         
-        // For temporary tokens, use simplified verification
         auth.tokenVerified = true;
         auth.apVerified = "TEMP";
-        auth.contentVerified = true; // Skip content verification for temp tokens
+        auth.contentVerified = true; 
         
-        // Set auth data and continue
         auth = { ...tokenData, ...auth };
         if (req.body?.content) {
           req.body = req.body.content;
@@ -87,7 +82,6 @@ export const authMiddleware = async (req, res, next) => {
       throw new Error(`Invalid token format: ${tokenError.message}`);
     }
 
-    // Normal token verification for non-temporary tokens
     const tokenVerification = await verifyToken(token, auth.applicable);
     auth.tokenVerified = tokenVerification.isTokenVerified;
     auth.apVerified = tokenVerification.isApVerified;
@@ -99,7 +93,6 @@ export const authMiddleware = async (req, res, next) => {
     
     console.log("✅ Token verified successfully");
     
-    // Content verification for non-GET requests
     if (req.method !== 'GET') {
       console.log("📦 Processing content verification for", req.method, "request");
       
@@ -141,7 +134,6 @@ export const authMiddleware = async (req, res, next) => {
       auth.contentVerified = true;
     }
     
-    // Handle PU certificate verification (unchanged)
     if (req.body?.pu_cert) {
       console.log("🎯 Processing PU certificate...");
       
@@ -182,10 +174,8 @@ export const authMiddleware = async (req, res, next) => {
       }
     }
     
-    // Merge authentication data
     auth = { ...tokenData, ...auth };
     
-    // Extract content from nested structure
     if (req.body?.content) {
       req.body = req.body.content;
     }

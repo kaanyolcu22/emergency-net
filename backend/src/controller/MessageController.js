@@ -60,7 +60,6 @@ class MessageController {
               error: "AP verification is invalid.",
             });
           } else {
-            // Check if this message has image data
             const hasImage = message.hasImage || false;
             const imageData = message.imageData || null;
             

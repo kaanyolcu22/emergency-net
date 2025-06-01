@@ -1,4 +1,3 @@
-// src/routes/publicRoutes.js - Updated with recovery entry point
 
 import express from 'express';
 import { registerController } from "../controller/RegisterController.js";

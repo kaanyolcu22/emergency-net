@@ -12,8 +12,8 @@ import {
   getPendingCrossAPRequests,
   getCrossAPResponses
 } from "../util/CrossApRecoveryUtil.js";
-import { CrossAPRecoveryRequest } from "../database/entity/CrossApRecoveryRequest.js";
-import { CrossAPRecoveryResponse } from "../database/entity/CrossApRecoveryResponse.js";
+import { CrossAPRecoveryRequest } from "../database/entity/CrossAPRecoveryRequest.js";
+import { CrossAPRecoveryResponse } from "../database/entity/CrossAPRecoveryResponse.js";
 import crypto from "crypto";
 
 const MAX_RECOVERY_ATTEMPTS = 5;
@@ -63,7 +63,6 @@ class RecoveryController {
   }
 
   async handleLocalRecovery(req, res, username, apIdentifier, recoveryHash, newPublicKey) {
-    // Start a database transaction to ensure data consistency
     const queryRunner = AppDataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -103,11 +102,10 @@ class RecoveryController {
         });
       }
 
-      // Check if the user is currently locked out
       const lockStatus = await this.checkLockStatus(user);
       if (lockStatus.isLocked) {
         await queryRunner.commitTransaction();
-        return res.status(423).json({ // 423 = Locked status code
+        return res.status(423).json({ 
           id: apId,
           tod: Date.now(),
           priority: -1,
@@ -118,7 +116,6 @@ class RecoveryController {
         });
       }
       
-      // Test the recovery hash against stored hash with variations
       const hashVariations = [recoveryHash];
       
       const possibleWords = [
@@ -132,14 +129,12 @@ class RecoveryController {
           const testHash = crypto.createHash('sha256').update(words).digest('hex');
           hashVariations.push(testHash);
         } catch (e) {
-          // Silent fail for hash generation errors
         }
       }
       
       const isValid = hashVariations.includes(user.recoveryKeyHash);
       
       if (isValid) {
-        // SUCCESS: Reset attempts and proceed with recovery
         await this.resetAttempts(queryRunner, user);
         
         let publicKeyForToken;
@@ -175,7 +170,6 @@ class RecoveryController {
         return res.status(200).json(response);
         
       } else {
-        // FAILURE: Record the failed attempt
         const attemptResult = await this.recordFailedAttempt(queryRunner, user);
         await queryRunner.commitTransaction();
         
@@ -215,7 +209,6 @@ class RecoveryController {
     }
   }
 
-  // Check if a user account is currently locked
   async checkLockStatus(user) {
     if (!user.recoveryLockedAt) {
       return { isLocked: false };
@@ -226,13 +219,11 @@ class RecoveryController {
     const now = new Date();
 
     if (now < unlockTime) {
-      // Still locked
       return {
         isLocked: true,
         unlockTime: unlockTime.toISOString()
       };
     } else {
-      // Lock has expired, clean it up
       await AppDataSource.manager.update(
         User,
         { username: user.username },
@@ -246,15 +237,12 @@ class RecoveryController {
     }
   }
 
-  // Record a failed recovery attempt and check if we should lock
   async recordFailedAttempt(queryRunner, user) {
     const currentAttempts = user.recoveryAttempts || 0;
     const newAttemptCount = currentAttempts + 1;
     const now = new Date();
     
-    // Check if this attempt should trigger a lock
     if (newAttemptCount >= MAX_RECOVERY_ATTEMPTS) {
-      // LOCK the account
       await queryRunner.manager.update(
         User,
         { username: user.username },
@@ -273,15 +261,14 @@ class RecoveryController {
         attemptsRemaining: 0
       };
     } else {
-      // Just increment the attempt counter
-      await queryRunner.manager.update(
-        User,
-        { username: user.username },
-        {
-          recoveryAttempts: newAttemptCount,
-          lastRecoveryAttempt: now
-        }
-      );
+        await queryRunner.manager.update(
+          User,
+          { username: user.username },
+          {
+            recoveryAttempts: newAttemptCount,
+            lastRecoveryAttempt: now
+          }
+        );
       
       return {
         isLocked: false,
@@ -290,7 +277,6 @@ class RecoveryController {
     }
   }
 
-  // Reset attempt counter after successful recovery
   async resetAttempts(queryRunner, user) {
     await queryRunner.manager.update(
       User,

@@ -96,16 +96,13 @@ export async function verifyRecoveryPhrase(recoveryPhrase, storedHash, storedSal
 }
 
 export function generateKeyPairFromSeed(seedMaterial) {
-  // Use a consistent seed approach for deterministic generation
   const seed = crypto.createHash('sha256').update(seedMaterial).digest();
   
-  // Create deterministic entropy for key generation
   const entropy = Buffer.concat([
     seed,
     Buffer.from('emergency-net-key-generation-v1', 'utf8')
   ]);
-  
-  // Generate key pair with deterministic seed
+
   const keyPair = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
     publicKeyEncoding: {

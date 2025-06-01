@@ -12,9 +12,6 @@ import { recoveryController } from "../controller/RecoveryController.js";
 const protectedRouter = express.Router();
 protectedRouter.use(authMiddleware);
 
-// ============================================================================
-// EXISTING ROUTES
-// ============================================================================
 
 protectedRouter.get("/hello", helloController.hello.bind(helloController));
 protectedRouter.post("/message", messageController.receiveMessage.bind(messageController));

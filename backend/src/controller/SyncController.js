@@ -20,8 +20,8 @@ import {
 import { checkTod } from "../util/Util.js";
 import { getBlacklistAsArray } from "../util/DatabaseUtil.js";
 import { addMissingBlacklistedPUs } from "../util/BlacklistUtil.js";
-import { CrossAPRecoveryRequest } from "../database/entity/CrossApRecoveryRequest.js";
-import { CrossAPRecoveryResponse } from "../database/entity/CrossApRecoveryResponse.js";
+import { CrossAPRecoveryRequest } from "../database/entity/CrossAPRecoveryRequest.js";
+import { CrossAPRecoveryResponse } from "../database/entity/CrossAPRecoveryResponse.js";
 import { User } from "../database/entity/User.js"; 
 
 class SyncController {

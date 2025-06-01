@@ -1,4 +1,3 @@
-// /src/database/entity/CrossAPRecoveryResponse.js
 import { EntitySchema } from "typeorm";
 
 export const CrossAPRecoveryResponse = new EntitySchema({

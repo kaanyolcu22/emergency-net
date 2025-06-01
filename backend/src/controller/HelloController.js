@@ -7,10 +7,8 @@ class HelloController {
     let token = req.header("authorization");
     let tod = Date.now();
     
-    // First check if there's a valid token
     if (token != null) {
       if (req.auth.tokenVerified) {
-        // User is authenticated with a valid token
         console.log("User has valid token - returning status 200");
         return res.status(200).json({
           id: apId,
@@ -21,7 +19,6 @@ class HelloController {
           adminPubKey: getAdminPublicKey()?.toString(),
         });
       } else {
-        // Token is present but invalid - clear rejection
         console.log("Token validation failed:", req.auth.errorMessage);
         return res.status(400).json({
           id: apId,

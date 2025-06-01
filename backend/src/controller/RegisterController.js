@@ -1,4 +1,3 @@
-// src/controllers/RegisterController.js - Updated with simple hash
 import { apId } from "../../bin/www.js";
 import { User } from "../database/entity/User.js";
 import { AppDataSource } from "../database/newDbSetup.js";
@@ -31,11 +30,9 @@ export class RegisterController {
     const otp = req.body.password;
     
     try {
-      // Generate recovery words
       const recoveryWords = generateRecoveryWords();
       const recoveryPhrase = recoveryWords.join(" ");
       
-      // Simple hash without salt for consistency with recovery verification
       const recoveryKeyHash = crypto.createHash('sha256').update(recoveryPhrase).digest('hex');
       
       console.log("Recovery hash created:", recoveryKeyHash.substring(0, 20) + "...");
@@ -43,7 +40,7 @@ export class RegisterController {
       const recoveryData = {
         username,
         recoveryKeyHash,
-        recoveryKeySalt: null, // No salt needed for simple hash
+        recoveryKeySalt: null, 
         recoveryKeyUpdatedAt: new Date()
       };
 
@@ -52,7 +49,7 @@ export class RegisterController {
       await AppDataSource.manager.save(User, { 
         username,
         recoveryKeyHash,
-        recoveryKeySalt: null, // No salt stored
+        recoveryKeySalt: null, 
         recoveryKeyUpdatedAt: new Date(),
         recoverySignature: recoverySignature,
         recoverySource: apId
