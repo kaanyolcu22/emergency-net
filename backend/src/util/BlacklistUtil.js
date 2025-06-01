@@ -1,7 +1,7 @@
 import { BlacklistedPU } from "../database/entity/BlacklistedPU.js";
 import { AppDataSource } from "../database/newDbSetup.js";
 
-export async function addMissingBlacklistedPUs(blacklistedPUs) {
+export async function addMissingBlacklistedPUs(blacklistedPUs = []) {
   await Promise.all(
     await blacklistedPUs.map(async (PU) => {
       try {

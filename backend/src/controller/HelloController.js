@@ -6,10 +6,11 @@ class HelloController {
   async hello(req, res, next) {
     let token = req.header("authorization");
     let tod = Date.now();
+    
     if (token != null) {
       if (req.auth.tokenVerified) {
-        // Correctly send the response
-        res.status(200).json({
+        console.log("User has valid token - returning status 200");
+        return res.status(200).json({
           id: apId,
           tod: tod,
           priority: -1,
@@ -18,8 +19,8 @@ class HelloController {
           adminPubKey: getAdminPublicKey()?.toString(),
         });
       } else {
-        // Correctly send the response with an error status
-        res.status(400).json({
+        console.log("Token validation failed:", req.auth.errorMessage);
+        return res.status(400).json({
           id: apId,
           tod: tod,
           priority: -1,
@@ -29,18 +30,17 @@ class HelloController {
             : "Signature check for token has failed",
         });
       }
-    } else {
-      // Correctly send the response with a different status
-      res.status(202).json({
-        id: apId,
-        tod: tod,
-        priority: -1,
-        type: "MT_HELLO_ACK",
-        cert: getApCert(),
-        adminPubKey: getAdminPublicKey()?.toString(),
-        isAdmin: getAdminPrivateKey() != null,
-      });
     }
+    
+    return res.status(202).json({
+      id: apId,
+      tod: tod,
+      priority: -1,
+      type: "MT_HELLO_ACK",
+      cert: getApCert(),
+      adminPubKey: getAdminPublicKey()?.toString(),
+      isAdmin: getAdminPrivateKey() != null,
+    });
   }
 }
 

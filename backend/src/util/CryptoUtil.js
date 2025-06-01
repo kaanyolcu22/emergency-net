@@ -16,7 +16,7 @@ export function base64toJson(base64String) {
 }
 
 export function publicEncrypt(pubKey, token) {
-  return crypto.publicEncrypt(pubKey, Buffer.from(token)).toString();
+  return crypto.publicEncrypt(pubKey, Buffer.from(token)).toString("base64");
 }
 
 export function publicDecrypt(pubKey, token) {
@@ -31,7 +31,7 @@ export function privateEncrypt(privateKey, token) {
 
 export function privateDecrypt(privateKey, encryptedToken) {
   return crypto
-    .privateDecrypt(privateKey, Buffer.from(encryptedToken))
+    .privateDecrypt(privateKey, Buffer.from(encryptedToken, "base64"))
     .toString();
 }
 
@@ -62,7 +62,6 @@ export function pemToPrivateKeyObject(pemContent) {
 
 export function signByAdmin(data) {
   const sign = crypto.createSign("RSA-SHA256");
-
   sign.update(data);
   const signAlgorithm = {
     key: getAdminPrivateKey(),
@@ -73,30 +72,81 @@ export function signByAdmin(data) {
   return sign.sign(signAlgorithm, "base64");
 }
 
-export function verify(data, signature, publicKey) {
-  const verify = crypto.createVerify("RSA-SHA256");
-  verify.update(data);
-  const signAlgorithm = {
-    key: publicKey,
-    saltLength: 0,
-    padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-  };
-  const isVerified = verify.verify(signAlgorithm, signature, "base64");
-  return isVerified;
+export async function verify(data, signature, publicKey) {
+  try {
+    if (typeof publicKey === 'string' && publicKey.includes('-----BEGIN PUBLIC KEY-----')) {
+      const pubKeyObj = crypto.createPublicKey({
+        key: publicKey,
+        format: 'pem'
+      });
+
+      const verify = crypto.createVerify("RSA-SHA256");
+      verify.update(data);
+      
+      return verify.verify({
+        key: pubKeyObj,
+        padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+        saltLength: 0
+      }, Buffer.from(signature, 'base64'));
+    }
+    
+    const verify = crypto.createVerify("RSA-SHA256");
+    verify.update(data);
+    const signAlgorithm = {
+      key: publicKey,
+      saltLength: 0,
+      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+    };
+    
+    return verify.verify(signAlgorithm, signature, "base64");
+  } catch (error) {
+    console.error("Verification error:", error);
+    return false;
+  }
 }
 
 export function hashBase64(base64String, algorithm = "sha256") {
   return createHash(algorithm).update(base64String).digest("base64");
 }
 
-// Admin-Certified AP
-// TO-DO:: object equality check will be implemented
 export function verifyACAP(encodedData, adminSignature) {
   const stringifiedData = JSON.stringify(base64toJson(encodedData));
-  return verify(stringifiedData, adminSignature, getAdminPublicKey());
+  return verifySync(stringifiedData, adminSignature, getAdminPublicKey());
 }
 
-// PU-Certified AP
+export function verifySync(data, signature, publicKey) {
+  try {
+    if (typeof publicKey === 'string' && publicKey.includes('-----BEGIN PUBLIC KEY-----')) {
+      const pubKeyObj = crypto.createPublicKey({
+        key: publicKey,
+        format: 'pem'
+      });
+      
+      const verify = crypto.createVerify("RSA-SHA256");
+      verify.update(data);
+      
+      return verify.verify({
+        key: pubKeyObj,
+        padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+        saltLength: 0
+      }, Buffer.from(signature, 'base64'));
+    }
+    
+    const verify = crypto.createVerify("RSA-SHA256");
+    verify.update(data);
+    const signAlgorithm = {
+      key: publicKey,
+      saltLength: 0,
+      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+    };
+    
+    return verify.verify(signAlgorithm, signature, "base64");
+  } catch (error) {
+    console.error("Synchronous verification error:", error);
+    return false;
+  }
+}
+
 export function verifyPUAP(
   encodedAPData,
   PUsignature,
@@ -105,10 +155,10 @@ export function verifyPUAP(
 ) {
   const PUData = base64toJson(encodedPUData);
   const stringifiedPUData = JSON.stringify(PUData);
-  if (verify(stringifiedPUData, adminSignature, getAdminPublicKey())) {
+  if (verifySync(stringifiedPUData, adminSignature, getAdminPublicKey())) {
     const stringifiedAPData = JSON.stringify(base64toJson(encodedAPData));
     const PUkey = PUData.pubKey;
-    return verify(stringifiedAPData, PUsignature, PUkey);
+    return verifySync(stringifiedAPData, PUsignature, PUkey);
   }
   return false;
 }
@@ -121,18 +171,14 @@ function verifyAPIdentity(obj1, obj2) {
 }
 
 export function comparePEMStrings(pem1, pem2) {
-  // Function to remove whitespace, headers, and footers
   const sanitizePEM = (pem) => {
     return pem
-      .replace(/-----(BEGIN|END)[^-]*-----/g, "") // Remove headers and footers
-      .replace(/\s+/g, ""); // Remove all whitespace
+      .replace(/-----(BEGIN|END)[^-]*-----/g, "")
+      .replace(/\s+/g, "");
   };
 
-  // Sanitize both PEM strings
   const sanitizedPem1 = sanitizePEM(pem1);
   const sanitizedPem2 = sanitizePEM(pem2);
-
-  // Compare sanitized strings
 
   return sanitizedPem1 === sanitizedPem2;
 }
@@ -184,10 +230,120 @@ export async function jwkToKeyObject(jwk) {
   return keyObject;
 }
 
-export async function getTokenData(token) {
-  const fragmentedToken = token.split(".");
-  const encodedData = fragmentedToken[0];
-  const data = base64toJson(encodedData);
-  data.mtPubKey = data.mtPubKey.toString().trim();
-  return data;
+export function getTokenData(token) {
+  if (!token) return null;
+  
+  try {
+    const fragmentedToken = token.split(".");
+    if (fragmentedToken.length < 1) return null;
+    
+    const encodedData = fragmentedToken[0];
+    const data = base64toJson(encodedData);
+    
+    if (data && data.mtPubKey) {
+      data.mtPubKey = data.mtPubKey.toString().trim();
+    }
+    
+    console.log("Extracted token data:", data);
+    return data;
+  } catch (error) {
+    console.error("Error extracting token data:", error);
+    return null;
+  }
+}
+
+// New functions for cross-AP recovery
+
+/**
+ * Encrypt data with AP's public key for cross-AP recovery
+ */
+export function encryptWithAPPublicKey(data, apPublicKeyPem) {
+  try {
+    const publicKey = crypto.createPublicKey({
+      key: apPublicKeyPem,
+      format: 'pem',
+      type: 'spki'
+    });
+    
+    const encrypted = crypto.publicEncrypt(
+      {
+        key: publicKey,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha256'
+      },
+      Buffer.from(data)
+    );
+    
+    return encrypted.toString('base64');
+  } catch (error) {
+    console.error("Encryption with AP public key failed:", error);
+    throw error;
+  }
+}
+
+/**
+ * Decrypt data with AP's private key for cross-AP recovery
+ */
+export function decryptWithAPPrivateKey(encryptedData) {
+  try {
+    const decrypted = crypto.privateDecrypt(
+      {
+        key: getPrivateKey(),
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha256'
+      },
+      Buffer.from(encryptedData, 'base64')
+    );
+    
+    return decrypted.toString();
+  } catch (error) {
+    console.error("Decryption with AP private key failed:", error);
+    throw error;
+  }
+}
+
+/**
+ * Encrypt data with ephemeral public key (PEM format)
+ */
+export function encryptWithEphemeralKey(data, ephemeralPublicKeyPem) {
+  try {
+    const publicKey = crypto.createPublicKey({
+      key: ephemeralPublicKeyPem,
+      format: 'pem',
+      type: 'spki'
+    });
+    
+    const encrypted = crypto.publicEncrypt(
+      {
+        key: publicKey,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: 'sha256'
+      },
+      Buffer.from(data)
+    );
+    
+    return encrypted.toString('base64');
+  } catch (error) {
+    console.error("Encryption with ephemeral key failed:", error);
+    throw error;
+  }
+}
+
+/**
+ * Hash data for cross-AP recovery verification
+ */
+export function hashForRecovery(data, salt = null) {
+  const hash = crypto.createHash('sha256');
+  hash.update(data);
+  if (salt) {
+    hash.update(salt);
+  }
+  return hash.digest('base64');
+}
+
+/**
+ * Generate random salt for recovery operations
+ */
+export function generateSalt() {
+  return crypto.randomBytes(16).toString('base64');
 }

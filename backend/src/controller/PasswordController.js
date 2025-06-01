@@ -3,7 +3,6 @@ import { generateOneTimePassword } from "../util/PasswordUtil.js";
 
 class PasswordController {
   async getPassword(req, res) {
-    // create one time password
     const otp = generateOneTimePassword();
     console.log("OTP is: ", otp);
 

@@ -29,5 +29,21 @@ export const Message = new EntitySchema({
     isSafe: {
       type: "boolean",
     },
+    hasImage: {
+      type: "boolean",
+      default: false,
+    },
+    imageData: {
+      type: "text", 
+      nullable: true,
+    },
+    imageWidth: {
+      type: "int",
+      nullable: true,
+    },
+    imageHeight: {
+      type: "int",
+      nullable: true,
+    }
   },
 });

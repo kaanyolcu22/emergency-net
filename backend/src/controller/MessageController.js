@@ -10,10 +10,6 @@ class MessageController {
     let tod_received = req.body.tod;
     let message = req.body.message;
     console.log("Message received:", message);
-    //let signature = req.body.signature;
-    //let mtPubKeyJwk = req.body.mtPubKey;
-    //const key = await jwkToKeyObject(mtPubKeyJwk);
-    //const mtPubKey = getKeyFromToken(token);
 
     const messageToSave = {
       content: message.content,
@@ -33,7 +29,6 @@ class MessageController {
     } else {
       const isTokenVerified = req.auth.tokenVerified;
       const isAPVerified = req.auth.apVerified;
-
       const mtPubKey = req.auth.mtPubKey;
 
       if (!isTokenVerified) {
@@ -65,6 +60,9 @@ class MessageController {
               error: "AP verification is invalid.",
             });
           } else {
+            const hasImage = message.hasImage || false;
+            const imageData = message.imageData || null;
+            
             AppDataSource.manager
               .save(Message, {
                 content: message.content,
@@ -75,6 +73,8 @@ class MessageController {
                 channel: message.channel,
                 tod: tod_received,
                 isSafe: isAPVerified === "VALID",
+                hasImage: hasImage,
+                imageData: imageData
               })
               .then((savedMessage) => {
                 console.log("Message saved successfully:", savedMessage);

@@ -12,9 +12,16 @@ export async function createChannel(channelName: string) {
 }
 
 export async function destroyChannel(channelName: string) {
+  const content = { 
+    channelName,
+    tod: Date.now()
+  };
+  
+  console.log("Sending channel deletion request:", content);
+  
   const response = await axios.delete(getApiURL() + "/channel", {
-    data: await MTResponseSigner({ channelName }),
+    data: await MTResponseSigner(content),
   });
-
+  
   return response.data;
 }

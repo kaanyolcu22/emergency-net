@@ -4,11 +4,14 @@ import { Message } from "./entity/Message.js";
 import { Channel } from "./entity/Channel.js";
 import { BlacklistedPU } from "./entity/BlacklistedPU.js";
 import { fillBlacklist } from "../util/DatabaseUtil.js";
+import { CrossAPRecoveryRequest } from "./entity/CrossAPRecoveryRequest.js";
+import { CrossAPRecoveryResponse } from "./entity/CrossAPRecoveryResponse.js";
 
+// In newDbSetup.js
 const AppDataSource = new DataSource({
   type: "sqlite",
   database: "./Emergency-Net-DB.db",
-  entities: [User, Message, Channel, BlacklistedPU],
+  entities: [User, Message, Channel, BlacklistedPU, CrossAPRecoveryRequest, CrossAPRecoveryResponse], // Add the missing entities
   synchronize: true,
 });
 
